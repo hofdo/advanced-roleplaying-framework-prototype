@@ -19,6 +19,7 @@ use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
 };
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -26,6 +27,7 @@ pub struct AppState {
     pub config: AppConfig,
     pub store: Arc<dyn ApplicationStore>,
     pub provider: Arc<dyn LlmProvider>,
+    pub provider_registry: Arc<RwLock<HashMap<Uuid, Arc<dyn LlmProvider>>>>,
     pub turn_lock: Arc<dyn SessionTurnLock>,
 }
 
@@ -50,27 +52,43 @@ impl AppState {
         )
         .map_err(|error| anyhow::anyhow!(error.to_string()))?);
 
-        let (store, turn_lock): (Arc<dyn ApplicationStore>, Arc<dyn SessionTurnLock>) =
-            match config.storage.backend {
-                StorageBackend::Memory => (
-                    Arc::new(ApiStore::default()),
-                    Arc::new(InMemorySessionTurnLock::default()),
-                ),
-                StorageBackend::Postgres => {
-                    let persistence = PgPersistence::connect(&config.database.url).await?;
-                    if config.storage.migrate_on_startup {
-                        persistence.migrate().await?;
-                    }
-                    let pg_lock =
-                        Arc::new(PostgresSessionTurnLock::new(persistence.pool().clone()));
-                    (Arc::new(PostgresApplicationStore::new(persistence)), pg_lock)
+        let (store, turn_lock, provider_registry): (
+            Arc<dyn ApplicationStore>,
+            Arc<dyn SessionTurnLock>,
+            Arc<RwLock<HashMap<Uuid, Arc<dyn LlmProvider>>>>,
+        ) = match config.storage.backend {
+            StorageBackend::Memory => (
+                Arc::new(ApiStore::default()),
+                Arc::new(InMemorySessionTurnLock::default()),
+                Arc::new(RwLock::new(HashMap::new())),
+            ),
+            StorageBackend::Postgres => {
+                let persistence = PgPersistence::connect(&config.database.url).await?;
+                if config.storage.migrate_on_startup {
+                    persistence.migrate().await?;
                 }
-            };
+                let pg_lock =
+                    Arc::new(PostgresSessionTurnLock::new(persistence.pool().clone()));
+                let db_records = ProviderConfigRepository::list(&persistence).await?;
+                let mut registry = HashMap::new();
+                for record in db_records {
+                    if let Ok(p) = provider_from_record(&record) {
+                        registry.insert(record.id, p);
+                    }
+                }
+                (
+                    Arc::new(PostgresApplicationStore::new(persistence)),
+                    pg_lock,
+                    Arc::new(RwLock::new(registry)),
+                )
+            }
+        };
 
         Ok(Self {
             config,
             store,
             provider,
+            provider_registry,
             turn_lock,
         })
     }
@@ -99,6 +117,7 @@ impl AppState {
             config,
             store: Arc::new(ApiStore::default()),
             provider,
+            provider_registry: Arc::new(RwLock::new(HashMap::new())),
             turn_lock: Arc::new(InMemorySessionTurnLock::default()),
         })
     }
@@ -113,8 +132,22 @@ impl AppState {
             config,
             store,
             provider,
+            provider_registry: Arc::new(RwLock::new(HashMap::new())),
             turn_lock,
         }
+    }
+
+    pub async fn resolve_provider(
+        &self,
+        provider_id: Option<Uuid>,
+    ) -> Arc<dyn LlmProvider> {
+        if let Some(id) = provider_id {
+            let registry = self.provider_registry.read().await;
+            if let Some(p) = registry.get(&id) {
+                return Arc::clone(p);
+            }
+        }
+        Arc::clone(&self.provider)
     }
 }
 
@@ -813,6 +846,22 @@ pub fn initial_world_state(session_id: SessionId, scenario: &Scenario) -> WorldS
         summary: None,
         recent_events: vec![],
     }
+}
+
+pub fn provider_from_record(
+    record: &ProviderRecord,
+) -> anyhow::Result<Arc<dyn LlmProvider>> {
+    let caps: ProviderCapabilities = serde_json::from_value(record.capabilities.clone())
+        .unwrap_or_default();
+    let provider = OpenAiCompatibleProvider::new(
+        record.name.clone(),
+        record.base_url.clone(),
+        record.api_key_secret_ref.clone(),
+        record.model.clone(),
+        caps,
+    )
+    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    Ok(Arc::new(provider))
 }
 
 pub async fn project_session_state(

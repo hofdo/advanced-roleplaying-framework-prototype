@@ -1,4 +1,4 @@
-use crate::{ApiError, AppState, project_session_state};
+use crate::{ApiError, AppState, project_session_state, provider_from_record};
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -82,7 +82,10 @@ async fn register_provider(
         capabilities: request.capabilities.unwrap_or(serde_json::Value::Object(Default::default())),
         is_default: request.is_default,
     };
-    let created = state.store.create_provider(record).await?;
+    let created = state.store.create_provider(record.clone()).await?;
+    if let Ok(provider) = provider_from_record(&record) {
+        state.provider_registry.write().await.insert(record.id, provider);
+    }
     Ok((StatusCode::CREATED, Json(created)))
 }
 
@@ -91,6 +94,7 @@ async fn delete_provider(
     Path(id): Path<Uuid>,
 ) -> Result<Json<DeleteResponse>, ApiError> {
     state.store.delete_provider(id).await?;
+    state.provider_registry.write().await.remove(&id);
     Ok(Json(DeleteResponse { deleted: true }))
 }
 
@@ -314,14 +318,7 @@ async fn turn(
         .get_session(session_id)
         .await?
         .ok_or_else(ApiError::not_found)?;
-    let provider = if session.provider_id.is_some() {
-        // Session has a provider override — currently only the default provider
-        // is instantiated, so we fall back to it. When a provider registry is
-        // added this is where the lookup will go.
-        Arc::clone(&state.provider)
-    } else {
-        Arc::clone(&state.provider)
-    };
+    let provider = state.resolve_provider(session.provider_id).await;
     let pipeline = DefaultTurnPipeline::with_lock(
         provider,
         Arc::clone(&state.store),
@@ -353,16 +350,7 @@ async fn turn_stream(
     // Resolve provider: session-scoped override takes priority over default.
     // Load session before entering the stream so we can pick the right provider.
     let resolved_provider = match state.store.get_session(session_id).await {
-        Ok(Some(session)) => {
-            if session.provider_id.is_some() {
-                // Session has a provider override — currently only the default provider
-                // is instantiated, so we fall back to it. When a provider registry is
-                // added this is where the lookup will go.
-                Arc::clone(&state.provider)
-            } else {
-                Arc::clone(&state.provider)
-            }
-        }
+        Ok(Some(session)) => state.resolve_provider(session.provider_id).await,
         Ok(None) => Arc::clone(&state.provider),
         Err(_) => Arc::clone(&state.provider),
     };
