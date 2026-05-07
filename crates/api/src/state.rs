@@ -5,12 +5,12 @@ use domain::{
     ScenarioId, SessionId, ViewerContext, WorldState,
 };
 use engine::{
-    FrontendStateProjector, InMemorySessionTurnLock, LoadedTurnState, TurnPipelineError,
-    TurnStateStore, ValidatedWorldStateDelta,
+    FrontendStateProjector, InMemorySessionTurnLock, LoadedTurnState, SessionTurnLock,
+    TurnPipelineError, TurnStateStore, ValidatedWorldStateDelta,
 };
 use persistence::{
-    EventRecord, EventRepository, PgPersistence, RepoError, ScenarioRepository, SessionRecord,
-    SessionRepository, WorldStateRepository,
+    EventRecord, EventRepository, PgPersistence, PostgresSessionTurnLock, RepoError,
+    ScenarioRepository, SessionRecord, SessionRepository, WorldStateRepository,
 };
 use providers::{LlmProvider, OpenAiCompatibleProvider, ProviderCapabilities};
 use shared::{AppConfig, StorageBackend};
@@ -25,7 +25,7 @@ pub struct AppState {
     pub config: AppConfig,
     pub store: Arc<dyn ApplicationStore>,
     pub provider: Arc<dyn LlmProvider>,
-    pub turn_lock: InMemorySessionTurnLock,
+    pub turn_lock: Arc<dyn SessionTurnLock>,
 }
 
 impl AppState {
@@ -49,22 +49,28 @@ impl AppState {
         )
         .map_err(|error| anyhow::anyhow!(error.to_string()))?);
 
-        let store: Arc<dyn ApplicationStore> = match config.storage.backend {
-            StorageBackend::Memory => Arc::new(ApiStore::default()),
-            StorageBackend::Postgres => {
-                let persistence = PgPersistence::connect(&config.database.url).await?;
-                if config.storage.migrate_on_startup {
-                    persistence.migrate().await?;
+        let (store, turn_lock): (Arc<dyn ApplicationStore>, Arc<dyn SessionTurnLock>) =
+            match config.storage.backend {
+                StorageBackend::Memory => (
+                    Arc::new(ApiStore::default()),
+                    Arc::new(InMemorySessionTurnLock::default()),
+                ),
+                StorageBackend::Postgres => {
+                    let persistence = PgPersistence::connect(&config.database.url).await?;
+                    if config.storage.migrate_on_startup {
+                        persistence.migrate().await?;
+                    }
+                    let pg_lock =
+                        Arc::new(PostgresSessionTurnLock::new(persistence.pool().clone()));
+                    (Arc::new(PostgresApplicationStore::new(persistence)), pg_lock)
                 }
-                Arc::new(PostgresApplicationStore::new(persistence))
-            }
-        };
+            };
 
         Ok(Self {
             config,
             store,
             provider,
-            turn_lock: InMemorySessionTurnLock::default(),
+            turn_lock,
         })
     }
 
@@ -92,7 +98,7 @@ impl AppState {
             config,
             store: Arc::new(ApiStore::default()),
             provider,
-            turn_lock: InMemorySessionTurnLock::default(),
+            turn_lock: Arc::new(InMemorySessionTurnLock::default()),
         })
     }
 
@@ -100,12 +106,13 @@ impl AppState {
         config: AppConfig,
         store: Arc<dyn ApplicationStore>,
         provider: Arc<dyn LlmProvider>,
+        turn_lock: Arc<dyn SessionTurnLock>,
     ) -> Self {
         Self {
             config,
             store,
             provider,
-            turn_lock: InMemorySessionTurnLock::default(),
+            turn_lock,
         }
     }
 }
