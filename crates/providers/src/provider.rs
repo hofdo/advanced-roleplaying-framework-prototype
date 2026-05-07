@@ -92,6 +92,8 @@ pub enum ProviderError {
     Transport(String),
     #[error("provider timeout")]
     Timeout,
+    #[error("provider rate-limited (HTTP 429)")]
+    RateLimit,
     #[error("provider returned status {status}: {body}")]
     Status { status: u16, body: String },
     #[error("provider response was malformed: {0}")]
@@ -100,4 +102,64 @@ pub enum ProviderError {
     StreamingUnsupported,
     #[error("mock provider has no queued response")]
     NoMockResponse,
+}
+
+/// Returns `true` for errors that are safe to retry (transport failures, timeouts, rate limits,
+/// HTTP 5xx server errors). Returns `false` for errors caused by bad input or bad model output,
+/// where retrying would produce the same result.
+pub fn is_retryable(error: &ProviderError) -> bool {
+    match error {
+        ProviderError::Transport(_) => true,
+        ProviderError::Timeout => true,
+        ProviderError::RateLimit => true,
+        ProviderError::Status { status, .. } => *status == 429 || *status >= 500,
+        ProviderError::MalformedResponse(_) => false,
+        ProviderError::StreamingUnsupported => false,
+        ProviderError::NoMockResponse => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transport_errors_are_retryable() {
+        assert!(is_retryable(&ProviderError::Transport("err".into())));
+        assert!(is_retryable(&ProviderError::Timeout));
+        assert!(is_retryable(&ProviderError::RateLimit));
+    }
+
+    #[test]
+    fn http_5xx_and_429_are_retryable() {
+        assert!(is_retryable(&ProviderError::Status {
+            status: 500,
+            body: String::new()
+        }));
+        assert!(is_retryable(&ProviderError::Status {
+            status: 503,
+            body: String::new()
+        }));
+        assert!(is_retryable(&ProviderError::Status {
+            status: 429,
+            body: String::new()
+        }));
+    }
+
+    #[test]
+    fn model_output_and_client_errors_are_not_retryable() {
+        assert!(!is_retryable(&ProviderError::MalformedResponse(
+            "bad json".into()
+        )));
+        assert!(!is_retryable(&ProviderError::StreamingUnsupported));
+        assert!(!is_retryable(&ProviderError::Status {
+            status: 400,
+            body: String::new()
+        }));
+        assert!(!is_retryable(&ProviderError::Status {
+            status: 404,
+            body: String::new()
+        }));
+        assert!(!is_retryable(&ProviderError::NoMockResponse));
+    }
 }
