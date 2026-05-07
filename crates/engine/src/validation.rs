@@ -1,6 +1,6 @@
 use domain::{
     ClockChange, EntityKey, FactSource, FactVisibility, FactionChange, LocationChange, NpcChange,
-    QuestChange, RelationshipChange, Scenario, WorldState, WorldStateDelta,
+    NpcStatus, QuestChange, RelationshipChange, Scenario, WorldState, WorldStateDelta,
     validate_npc_status_transition,
 };
 use std::collections::HashSet;
@@ -75,13 +75,46 @@ impl DeltaValidator for BasicDeltaValidator {
         }
 
         for change in &delta.npc_changes {
+            let npc_id = match change {
+                NpcChange::AttitudeChanged { npc_id, .. }
+                | NpcChange::KnowledgeAdded { npc_id, .. }
+                | NpcChange::StatusChanged { npc_id, .. }
+                | NpcChange::LocationChanged { npc_id, .. } => npc_id,
+            };
+
             match change {
-                NpcChange::AttitudeChanged { npc_id, reason, .. }
-                | NpcChange::KnowledgeAdded { npc_id, reason, .. }
-                | NpcChange::StatusChanged { npc_id, reason, .. }
-                | NpcChange::LocationChanged { npc_id, reason, .. } => {
+                NpcChange::AttitudeChanged { reason, .. }
+                | NpcChange::KnowledgeAdded { reason, .. }
+                | NpcChange::StatusChanged { reason, .. }
+                | NpcChange::LocationChanged { reason, .. } => {
                     require_known("npc", npc_id, &npc_ids)?;
                     require_reason(reason)?;
+                }
+            }
+
+            // Check that the proposed change is allowed given the NPC's current status.
+            let current_npc = world_state.npcs.iter().find(|n| n.npc_id == *npc_id);
+            if let Some(npc) = current_npc {
+                match change {
+                    NpcChange::KnowledgeAdded { .. } | NpcChange::AttitudeChanged { .. } => {
+                        if matches!(npc.status, NpcStatus::Unconscious | NpcStatus::Dead) {
+                            return Err(DeltaValidationError::InvalidNpcStatusAction {
+                                npc_id: npc_id.clone(),
+                                status: npc.status,
+                                action: "knowledge or attitude change".into(),
+                            });
+                        }
+                    }
+                    NpcChange::LocationChanged { .. } => {
+                        if npc.status == NpcStatus::Dead {
+                            return Err(DeltaValidationError::InvalidNpcStatusAction {
+                                npc_id: npc_id.clone(),
+                                status: npc.status,
+                                action: "location change".into(),
+                            });
+                        }
+                    }
+                    NpcChange::StatusChanged { .. } => {} // Always allowed — this is how you change status
                 }
             }
 
@@ -295,6 +328,12 @@ pub enum DeltaValidationError {
         "PlayerKnown fact references secrets but provides no reveal_condition_satisfied proof"
     )]
     MissingRevealProof,
+    #[error("NPC {npc_id} (status: {status:?}) cannot perform {action}")]
+    InvalidNpcStatusAction {
+        npc_id: EntityKey,
+        status: NpcStatus,
+        action: String,
+    },
 }
 
 #[cfg(test)]
@@ -516,5 +555,153 @@ mod tests {
         BasicDeltaValidator
             .validate(&scenario(), &state(), &delta)
             .expect("GM-only fact with secret ref and no proof should pass");
+    }
+
+    // --- NPC status action restriction tests ---
+
+    fn state_with_npc_status(status: NpcStatus) -> WorldState {
+        let mut s = state();
+        s.npcs[0].status = status;
+        s
+    }
+
+    #[test]
+    fn dead_npc_cannot_gain_knowledge() {
+        let world = state_with_npc_status(NpcStatus::Dead);
+        let delta = WorldStateDelta {
+            npc_changes: vec![NpcChange::KnowledgeAdded {
+                npc_id: "examiner".into(),
+                fact: "The guild has a vault.".into(),
+                visibility: FactVisibility::GmOnly,
+                reason: "The examiner somehow learned this.".into(),
+            }],
+            ..WorldStateDelta::default()
+        };
+
+        let err = BasicDeltaValidator
+            .validate(&scenario(), &world, &delta)
+            .expect_err("dead NPC gaining knowledge must be rejected");
+
+        assert!(
+            matches!(
+                err,
+                DeltaValidationError::InvalidNpcStatusAction { .. }
+            ),
+            "expected InvalidNpcStatusAction, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn dead_npc_cannot_change_attitude() {
+        let world = state_with_npc_status(NpcStatus::Dead);
+        let delta = WorldStateDelta {
+            npc_changes: vec![NpcChange::AttitudeChanged {
+                npc_id: "examiner".into(),
+                attitude: "hostile".into(),
+                reason: "The examiner turned hostile posthumously.".into(),
+            }],
+            ..WorldStateDelta::default()
+        };
+
+        let err = BasicDeltaValidator
+            .validate(&scenario(), &world, &delta)
+            .expect_err("dead NPC attitude change must be rejected");
+
+        assert!(
+            matches!(
+                err,
+                DeltaValidationError::InvalidNpcStatusAction { .. }
+            ),
+            "expected InvalidNpcStatusAction, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn dead_npc_cannot_move() {
+        let world = state_with_npc_status(NpcStatus::Dead);
+        let delta = WorldStateDelta {
+            npc_changes: vec![NpcChange::LocationChanged {
+                npc_id: "examiner".into(),
+                location_id: "guildhall".into(),
+                reason: "The corpse walked over somehow.".into(),
+            }],
+            ..WorldStateDelta::default()
+        };
+
+        let err = BasicDeltaValidator
+            .validate(&scenario(), &world, &delta)
+            .expect_err("dead NPC location change must be rejected");
+
+        assert!(
+            matches!(
+                err,
+                DeltaValidationError::InvalidNpcStatusAction { .. }
+            ),
+            "expected InvalidNpcStatusAction, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn dead_npc_status_change_allowed() {
+        let world = state_with_npc_status(NpcStatus::Dead);
+        // Changing from Dead to Injured simulates a resurrection/revival.
+        // validate_npc_status_transition only blocks Dead->Active without revival,
+        // so Dead->Injured is permitted at this layer.
+        let delta = WorldStateDelta {
+            npc_changes: vec![NpcChange::StatusChanged {
+                npc_id: "examiner".into(),
+                status: NpcStatus::Injured,
+                reason: "A cleric cast revivify on the examiner.".into(),
+            }],
+            ..WorldStateDelta::default()
+        };
+
+        BasicDeltaValidator
+            .validate(&scenario(), &world, &delta)
+            .expect("StatusChanged on a dead NPC must be allowed (revival path)");
+    }
+
+    #[test]
+    fn unconscious_npc_cannot_gain_knowledge() {
+        let world = state_with_npc_status(NpcStatus::Unconscious);
+        let delta = WorldStateDelta {
+            npc_changes: vec![NpcChange::KnowledgeAdded {
+                npc_id: "examiner".into(),
+                fact: "The guild has a vault.".into(),
+                visibility: FactVisibility::GmOnly,
+                reason: "The examiner somehow absorbed this while unconscious.".into(),
+            }],
+            ..WorldStateDelta::default()
+        };
+
+        let err = BasicDeltaValidator
+            .validate(&scenario(), &world, &delta)
+            .expect_err("unconscious NPC gaining knowledge must be rejected");
+
+        assert!(
+            matches!(
+                err,
+                DeltaValidationError::InvalidNpcStatusAction { .. }
+            ),
+            "expected InvalidNpcStatusAction, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn active_npc_can_gain_knowledge() {
+        let world = state_with_npc_status(NpcStatus::Active);
+        let delta = WorldStateDelta {
+            npc_changes: vec![NpcChange::KnowledgeAdded {
+                npc_id: "examiner".into(),
+                fact: "The guild has a vault.".into(),
+                visibility: FactVisibility::GmOnly,
+                reason: "The examiner overheard a conversation.".into(),
+            }],
+            ..WorldStateDelta::default()
+        };
+
+        BasicDeltaValidator
+            .validate(&scenario(), &world, &delta)
+            .expect("active NPC gaining knowledge must be allowed");
     }
 }

@@ -1,9 +1,10 @@
-use crate::{ApiError, AppState, project_session_state};
+use crate::{ApiError, AppState, project_session_state, provider_from_record};
 use axum::{
     Json, Router,
     extract::{Path, State},
+    http::StatusCode,
     response::sse::{Event, Sse},
-    routing::{get, patch, post},
+    routing::{delete, get, patch, post},
 };
 use domain::{Scenario, SessionId, TurnMode, ViewerContext};
 use engine::{
@@ -18,10 +19,11 @@ use uuid::Uuid;
 pub fn app_router(app_state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
-        .route("/providers", get(list_providers))
+        .route("/providers", get(list_providers).post(register_provider))
         .route("/providers/test", post(test_provider))
         .route("/providers/health", get(provider_health))
         .route("/providers/readiness", get(provider_readiness))
+        .route("/providers/:id", delete(delete_provider))
         .route(
             "/sessions/:session_id/provider",
             patch(set_session_provider),
@@ -49,6 +51,10 @@ pub fn app_router(app_state: AppState) -> Router {
             "/admin/sessions/:session_id/export/raw",
             get(export_session_raw),
         )
+        .route(
+            "/admin/sessions/:session_id/turn/debug",
+            post(debug_turn),
+        )
         .with_state(app_state)
 }
 
@@ -60,15 +66,40 @@ async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
     })
 }
 
-async fn list_providers(State(state): State<AppState>) -> Json<Vec<ProviderResponse>> {
-    Json(vec![ProviderResponse {
-        name: state.config.provider.default.name,
-        provider_type: state.config.provider.default.provider_type,
-        base_url: state.config.provider.default.base_url,
-        model: state.config.provider.default.model,
-        supports_streaming: state.config.provider.default.supports_streaming,
-        supports_json_mode: state.config.provider.default.supports_json_mode,
-    }])
+async fn list_providers(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<persistence::ProviderRecord>>, ApiError> {
+    Ok(Json(state.store.list_providers().await?))
+}
+
+async fn register_provider(
+    State(state): State<AppState>,
+    Json(request): Json<RegisterProviderRequest>,
+) -> Result<(StatusCode, Json<persistence::ProviderRecord>), ApiError> {
+    let record = persistence::ProviderRecord {
+        id: Uuid::new_v4(),
+        name: request.name,
+        provider_type: request.provider_type,
+        base_url: request.base_url,
+        model: request.model,
+        api_key_secret_ref: request.api_key_secret_ref,
+        capabilities: request.capabilities.unwrap_or(serde_json::Value::Object(Default::default())),
+        is_default: request.is_default,
+    };
+    let created = state.store.create_provider(record.clone()).await?;
+    if let Ok(provider) = provider_from_record(&record) {
+        state.provider_registry.write().await.insert(record.id, provider);
+    }
+    Ok((StatusCode::CREATED, Json(created)))
+}
+
+async fn delete_provider(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<DeleteResponse>, ApiError> {
+    state.store.delete_provider(id).await?;
+    state.provider_registry.write().await.remove(&id);
+    Ok(Json(DeleteResponse { deleted: true }))
 }
 
 async fn test_provider(
@@ -291,14 +322,7 @@ async fn turn(
         .get_session(session_id)
         .await?
         .ok_or_else(ApiError::not_found)?;
-    let provider = if session.provider_id.is_some() {
-        // Session has a provider override — currently only the default provider
-        // is instantiated, so we fall back to it. When a provider registry is
-        // added this is where the lookup will go.
-        Arc::clone(&state.provider)
-    } else {
-        Arc::clone(&state.provider)
-    };
+    let provider = state.resolve_provider(session.provider_id).await;
     let pipeline = DefaultTurnPipeline::with_lock(
         provider,
         Arc::clone(&state.store),
@@ -322,6 +346,41 @@ async fn turn(
     }))
 }
 
+async fn debug_turn(
+    State(state): State<AppState>,
+    Path(session_id): Path<SessionId>,
+    Json(request): Json<TurnRequest>,
+) -> Result<Json<DebugTurnResponseBody>, ApiError> {
+    let session = state
+        .store
+        .get_session(session_id)
+        .await?
+        .ok_or_else(ApiError::not_found)?;
+    let provider = state.resolve_provider(session.provider_id).await;
+    let pipeline = DefaultTurnPipeline::with_lock(
+        provider,
+        Arc::clone(&state.store),
+        state.turn_lock.clone(),
+    );
+    let response = pipeline
+        .process_turn_debug(TurnRequestInput {
+            session_id,
+            input: request.input,
+            mode: request.mode,
+            viewer: ViewerContext::player(),
+        })
+        .await?;
+    Ok(Json(DebugTurnResponseBody {
+        message_id: response.turn.message_id,
+        player_response: response.turn.player_response,
+        scene_type: response.turn.scene_type,
+        world_state_version: response.turn.world_state_version,
+        changed_entities: response.turn.changed_entities,
+        frontend_state_patch: response.turn.frontend_state_patch,
+        applied_delta: response.applied_delta,
+    }))
+}
+
 async fn turn_stream(
     State(state): State<AppState>,
     Path(session_id): Path<SessionId>,
@@ -330,22 +389,14 @@ async fn turn_stream(
     // Resolve provider: session-scoped override takes priority over default.
     // Load session before entering the stream so we can pick the right provider.
     let resolved_provider = match state.store.get_session(session_id).await {
-        Ok(Some(session)) => {
-            if session.provider_id.is_some() {
-                // Session has a provider override — currently only the default provider
-                // is instantiated, so we fall back to it. When a provider registry is
-                // added this is where the lookup will go.
-                Arc::clone(&state.provider)
-            } else {
-                Arc::clone(&state.provider)
-            }
-        }
+        Ok(Some(session)) => state.resolve_provider(session.provider_id).await,
         Ok(None) => Arc::clone(&state.provider),
         Err(_) => Arc::clone(&state.provider),
     };
 
     let events = async_stream::stream! {
         let input = request.input;
+        let mode = request.mode;
         // Build a pipeline so all component logic (prepare / finalize) lives in
         // the engine crate rather than being duplicated here.
         let pipeline = DefaultTurnPipeline::with_lock(
@@ -363,7 +414,7 @@ async fn turn_stream(
         };
 
         // --- Preparation (lock, load, classify, context) ---
-        let prepared = match pipeline.prepare_turn_context(session_id, &input).await {
+        let prepared = match pipeline.prepare_turn_context(session_id, &input, mode).await {
             Ok(prepared) => prepared,
             Err(error) => {
                 yield Ok(error_event(error.to_string()));
@@ -502,16 +553,6 @@ struct HealthResponse {
 }
 
 #[derive(Debug, Serialize)]
-struct ProviderResponse {
-    name: String,
-    provider_type: String,
-    base_url: String,
-    model: String,
-    supports_streaming: bool,
-    supports_json_mode: bool,
-}
-
-#[derive(Debug, Serialize)]
 struct ProviderTestResponse {
     ok: bool,
     message: String,
@@ -529,6 +570,17 @@ struct ProviderReadinessResponse {
     configured: bool,
     reachable: bool,
     message: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RegisterProviderRequest {
+    name: String,
+    provider_type: String,
+    base_url: String,
+    model: String,
+    api_key_secret_ref: Option<String>,
+    capabilities: Option<serde_json::Value>,
+    is_default: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -557,6 +609,17 @@ struct TurnResponseBody {
     world_state_version: i64,
     changed_entities: Vec<domain::EntityRef>,
     frontend_state_patch: domain::FrontendStatePatch,
+}
+
+#[derive(Debug, Serialize)]
+struct DebugTurnResponseBody {
+    message_id: Uuid,
+    player_response: String,
+    scene_type: domain::SceneReasoningStyle,
+    world_state_version: i64,
+    changed_entities: Vec<domain::EntityRef>,
+    frontend_state_patch: domain::FrontendStatePatch,
+    applied_delta: domain::WorldStateDelta,
 }
 
 #[derive(Debug, Serialize)]

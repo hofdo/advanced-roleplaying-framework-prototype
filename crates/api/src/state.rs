@@ -9,8 +9,9 @@ use engine::{
     TurnPipelineError, TurnStateStore, ValidatedWorldStateDelta,
 };
 use persistence::{
-    EventRecord, EventRepository, PgPersistence, PostgresSessionTurnLock, RepoError,
-    ScenarioRepository, SessionRecord, SessionRepository, WorldStateRepository,
+    EventRecord, EventRepository, PgPersistence, PostgresSessionTurnLock, ProviderConfigRepository,
+    ProviderRecord, RepoError, ScenarioRepository, SessionRecord, SessionRepository,
+    WorldStateRepository,
 };
 use providers::{LlmProvider, OpenAiCompatibleProvider, ProviderCapabilities};
 use shared::{AppConfig, StorageBackend};
@@ -18,6 +19,7 @@ use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
 };
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -25,6 +27,7 @@ pub struct AppState {
     pub config: AppConfig,
     pub store: Arc<dyn ApplicationStore>,
     pub provider: Arc<dyn LlmProvider>,
+    pub provider_registry: Arc<RwLock<HashMap<Uuid, Arc<dyn LlmProvider>>>>,
     pub turn_lock: Arc<dyn SessionTurnLock>,
 }
 
@@ -49,27 +52,43 @@ impl AppState {
         )
         .map_err(|error| anyhow::anyhow!(error.to_string()))?);
 
-        let (store, turn_lock): (Arc<dyn ApplicationStore>, Arc<dyn SessionTurnLock>) =
-            match config.storage.backend {
-                StorageBackend::Memory => (
-                    Arc::new(ApiStore::default()),
-                    Arc::new(InMemorySessionTurnLock::default()),
-                ),
-                StorageBackend::Postgres => {
-                    let persistence = PgPersistence::connect(&config.database.url).await?;
-                    if config.storage.migrate_on_startup {
-                        persistence.migrate().await?;
-                    }
-                    let pg_lock =
-                        Arc::new(PostgresSessionTurnLock::new(persistence.pool().clone()));
-                    (Arc::new(PostgresApplicationStore::new(persistence)), pg_lock)
+        let (store, turn_lock, provider_registry): (
+            Arc<dyn ApplicationStore>,
+            Arc<dyn SessionTurnLock>,
+            Arc<RwLock<HashMap<Uuid, Arc<dyn LlmProvider>>>>,
+        ) = match config.storage.backend {
+            StorageBackend::Memory => (
+                Arc::new(ApiStore::default()),
+                Arc::new(InMemorySessionTurnLock::default()),
+                Arc::new(RwLock::new(HashMap::new())),
+            ),
+            StorageBackend::Postgres => {
+                let persistence = PgPersistence::connect(&config.database.url).await?;
+                if config.storage.migrate_on_startup {
+                    persistence.migrate().await?;
                 }
-            };
+                let pg_lock =
+                    Arc::new(PostgresSessionTurnLock::new(persistence.pool().clone()));
+                let db_records = ProviderConfigRepository::list(&persistence).await?;
+                let mut registry = HashMap::new();
+                for record in db_records {
+                    if let Ok(p) = provider_from_record(&record) {
+                        registry.insert(record.id, p);
+                    }
+                }
+                (
+                    Arc::new(PostgresApplicationStore::new(persistence)),
+                    pg_lock,
+                    Arc::new(RwLock::new(registry)),
+                )
+            }
+        };
 
         Ok(Self {
             config,
             store,
             provider,
+            provider_registry,
             turn_lock,
         })
     }
@@ -98,6 +117,7 @@ impl AppState {
             config,
             store: Arc::new(ApiStore::default()),
             provider,
+            provider_registry: Arc::new(RwLock::new(HashMap::new())),
             turn_lock: Arc::new(InMemorySessionTurnLock::default()),
         })
     }
@@ -112,8 +132,22 @@ impl AppState {
             config,
             store,
             provider,
+            provider_registry: Arc::new(RwLock::new(HashMap::new())),
             turn_lock,
         }
+    }
+
+    pub async fn resolve_provider(
+        &self,
+        provider_id: Option<Uuid>,
+    ) -> Arc<dyn LlmProvider> {
+        if let Some(id) = provider_id {
+            let registry = self.provider_registry.read().await;
+            if let Some(p) = registry.get(&id) {
+                return Arc::clone(p);
+            }
+        }
+        Arc::clone(&self.provider)
     }
 }
 
@@ -146,6 +180,12 @@ pub trait ApplicationStore: TurnStateStore + Send + Sync {
         session_id: SessionId,
     ) -> Result<Option<WorldState>, TurnPipelineError>;
     async fn events(&self, session_id: SessionId) -> Result<Vec<EventRecord>, TurnPipelineError>;
+    async fn create_provider(
+        &self,
+        record: ProviderRecord,
+    ) -> Result<ProviderRecord, TurnPipelineError>;
+    async fn list_providers(&self) -> Result<Vec<ProviderRecord>, TurnPipelineError>;
+    async fn delete_provider(&self, id: Uuid) -> Result<(), TurnPipelineError>;
 }
 
 #[derive(Debug, Default)]
@@ -160,6 +200,7 @@ struct ApiStoreInner {
     world_states: HashMap<SessionId, WorldState>,
     messages: HashMap<SessionId, Vec<MessageRecord>>,
     events: HashMap<SessionId, Vec<EventRecord>>,
+    providers: Vec<ProviderRecord>,
 }
 
 impl ApiStore {
@@ -354,6 +395,36 @@ impl ApplicationStore for ApiStore {
 
     async fn events(&self, session_id: SessionId) -> Result<Vec<EventRecord>, TurnPipelineError> {
         Ok(ApiStore::events(self, session_id))
+    }
+
+    async fn create_provider(
+        &self,
+        record: ProviderRecord,
+    ) -> Result<ProviderRecord, TurnPipelineError> {
+        self.inner
+            .lock()
+            .expect("api store mutex")
+            .providers
+            .push(record.clone());
+        Ok(record)
+    }
+
+    async fn list_providers(&self) -> Result<Vec<ProviderRecord>, TurnPipelineError> {
+        Ok(self
+            .inner
+            .lock()
+            .expect("api store mutex")
+            .providers
+            .clone())
+    }
+
+    async fn delete_provider(&self, id: Uuid) -> Result<(), TurnPipelineError> {
+        self.inner
+            .lock()
+            .expect("api store mutex")
+            .providers
+            .retain(|p| p.id != id);
+        Ok(())
     }
 }
 
@@ -631,6 +702,27 @@ impl ApplicationStore for PostgresApplicationStore {
             .await
             .map_err(repo_to_pipeline)
     }
+
+    async fn create_provider(
+        &self,
+        record: ProviderRecord,
+    ) -> Result<ProviderRecord, TurnPipelineError> {
+        ProviderConfigRepository::create(&self.persistence, record)
+            .await
+            .map_err(repo_to_pipeline)
+    }
+
+    async fn list_providers(&self) -> Result<Vec<ProviderRecord>, TurnPipelineError> {
+        ProviderConfigRepository::list(&self.persistence)
+            .await
+            .map_err(repo_to_pipeline)
+    }
+
+    async fn delete_provider(&self, id: Uuid) -> Result<(), TurnPipelineError> {
+        ProviderConfigRepository::delete(&self.persistence, id)
+            .await
+            .map_err(repo_to_pipeline)
+    }
 }
 
 #[async_trait]
@@ -754,6 +846,22 @@ pub fn initial_world_state(session_id: SessionId, scenario: &Scenario) -> WorldS
         summary: None,
         recent_events: vec![],
     }
+}
+
+pub fn provider_from_record(
+    record: &ProviderRecord,
+) -> anyhow::Result<Arc<dyn LlmProvider>> {
+    let caps: ProviderCapabilities = serde_json::from_value(record.capabilities.clone())
+        .unwrap_or_default();
+    let provider = OpenAiCompatibleProvider::new(
+        record.name.clone(),
+        record.base_url.clone(),
+        record.api_key_secret_ref.clone(),
+        record.model.clone(),
+        caps,
+    )
+    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    Ok(Arc::new(provider))
 }
 
 pub async fn project_session_state(

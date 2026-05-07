@@ -1,5 +1,5 @@
 use crate::AgentContext;
-use domain::WorldStateDelta;
+use domain::{TurnMode, WorldStateDelta};
 use providers::{LlmMessage, LlmMessageRole, LlmRequest};
 use serde::Deserialize;
 use thiserror::Error;
@@ -26,7 +26,7 @@ impl PromptBuilder for BasicPromptBuilder {
             messages: vec![
                 LlmMessage {
                     role: LlmMessageRole::System,
-                    content: system_rules(),
+                    content: system_rules(context.mode),
                 },
                 LlmMessage {
                     role: LlmMessageRole::User,
@@ -50,7 +50,7 @@ impl PromptBuilder for BasicPromptBuilder {
                     role: LlmMessageRole::System,
                     content: format!(
                         "{}\nStream only player-visible narration. Do not emit JSON.",
-                        system_rules()
+                        system_rules(context.mode)
                     ),
                 },
                 LlmMessage {
@@ -98,8 +98,8 @@ impl PromptBuilder for BasicPromptBuilder {
     }
 }
 
-fn system_rules() -> String {
-    [
+fn system_rules(mode: Option<TurnMode>) -> String {
+    let base = [
         "You are a roleplaying engine that generates immersive storyteller output.",
         "Stay in-world unless rules adjudication is required.",
         "Respect world state, role identities, faction goals, clocks, and known facts.",
@@ -107,7 +107,26 @@ fn system_rules() -> String {
         "Do not reveal GM-only secrets unless the player has discovered them through justified action.",
         "The LLM proposes typed deltas; the engine validates and applies them.",
     ]
-    .join("\n")
+    .join("\n");
+
+    let preamble = match mode {
+        Some(TurnMode::Action) => {
+            Some("The player is performing an in-world action. Narrate the outcome.")
+        }
+        Some(TurnMode::Direct) => {
+            Some("The player is asking an out-of-character question. Answer as GM directly and clearly. Do not stay in character.")
+        }
+        Some(TurnMode::Remember) => {
+            Some("The player is providing a memory or fact correction. Acknowledge it, update your understanding, and confirm what changed.")
+        }
+        // Dialogue and None: no preamble — character dialogue is the default
+        Some(TurnMode::Dialogue) | None => None,
+    };
+
+    match preamble {
+        Some(text) => format!("{text}\n{base}"),
+        None => base,
+    }
 }
 
 fn render_context(context: &AgentContext) -> String {
@@ -230,5 +249,96 @@ mod tests {
         assert!(prompt.contains("facts_to_add"));
         assert!(prompt.contains("npc_changes"));
         assert!(prompt.contains("{ bad json }"));
+    }
+
+    // ---- TurnMode prompt shaping tests ----
+
+    fn minimal_context(mode: Option<TurnMode>) -> crate::AgentContext {
+        use crate::{
+            FactionContext, MessageContext, NpcContext, ReasoningStyleDirective,
+            RoleActivationContext,
+        };
+        use domain::SceneReasoningStyle;
+        crate::AgentContext {
+            scenario_title: "Test".into(),
+            setting_summary: "Test setting".into(),
+            current_location: None,
+            active_role: RoleActivationContext {
+                active_role_name: None,
+                emotion_now: None,
+                motivation_now: None,
+                knowledge_boundaries: vec![],
+                forbidden_moves: vec![],
+                speech_constraints: vec![],
+            },
+            scene_directive: ReasoningStyleDirective {
+                style: SceneReasoningStyle::CharacterDialogue,
+                priorities: vec![],
+                avoid: vec![],
+                visible_response_shape: "narration".into(),
+            },
+            relevant_npcs: vec![],
+            relevant_factions: vec![],
+            active_quests: vec![],
+            active_clocks: vec![],
+            player_known_facts: vec![],
+            gm_only_facts: vec![],
+            recent_summary: None,
+            recent_messages: vec![],
+            rules: vec![],
+            mode,
+        }
+    }
+
+    fn system_message_content(request: &providers::LlmRequest) -> &str {
+        request
+            .messages
+            .iter()
+            .find(|m| m.role == providers::LlmMessageRole::System)
+            .map(|m| m.content.as_str())
+            .unwrap_or("")
+    }
+
+    #[test]
+    fn direct_mode_sets_gm_system_prompt() {
+        let ctx = minimal_context(Some(TurnMode::Direct));
+        let request = BasicPromptBuilder.build_non_streaming_prompt(&ctx, "What is the rule?");
+        let system = system_message_content(&request);
+        assert!(
+            system.contains("out-of-character") || system.contains("GM directly"),
+            "expected GM direct answer preamble, got: {system}"
+        );
+    }
+
+    #[test]
+    fn remember_mode_sets_fact_correction_prompt() {
+        let ctx = minimal_context(Some(TurnMode::Remember));
+        let request = BasicPromptBuilder.build_non_streaming_prompt(&ctx, "Remember that...");
+        let system = system_message_content(&request);
+        assert!(
+            system.contains("fact correction") || system.contains("memory"),
+            "expected memory/fact correction preamble, got: {system}"
+        );
+    }
+
+    #[test]
+    fn dialogue_mode_uses_default_prompt() {
+        let ctx_dialogue = minimal_context(Some(TurnMode::Dialogue));
+        let ctx_none = minimal_context(None);
+        let req_d = BasicPromptBuilder.build_non_streaming_prompt(&ctx_dialogue, "Hello.");
+        let req_n = BasicPromptBuilder.build_non_streaming_prompt(&ctx_none, "Hello.");
+        let sys_d = system_message_content(&req_d);
+        let sys_n = system_message_content(&req_n);
+        // Neither should contain a mode-specific preamble
+        assert!(
+            !sys_d.contains("out-of-character") && !sys_d.contains("fact correction"),
+            "Dialogue mode should not add special preamble, got: {sys_d}"
+        );
+        assert!(
+            !sys_n.contains("out-of-character") && !sys_n.contains("fact correction"),
+            "None mode should not add special preamble, got: {sys_n}"
+        );
+        // Both should produce the same system prompt
+        assert_eq!(sys_d, sys_n);
     }
 }

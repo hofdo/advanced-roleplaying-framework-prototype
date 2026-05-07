@@ -34,3 +34,4 @@ http-body-util.workspace = true
 providers.workspace = true
 testcontainers-modules = { version = "0.15", features = ["postgres"] }
 tower.workspace = true
+wiremock.workspace = true

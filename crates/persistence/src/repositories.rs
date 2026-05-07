@@ -595,6 +595,114 @@ fn repo_to_pipeline(error: RepoError) -> TurnPipelineError {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderRecord {
+    pub id: Uuid,
+    pub name: String,
+    pub provider_type: String,
+    pub base_url: String,
+    pub model: String,
+    pub api_key_secret_ref: Option<String>,
+    pub capabilities: serde_json::Value,
+    pub is_default: bool,
+}
+
+#[async_trait]
+pub trait ProviderConfigRepository: Send + Sync {
+    async fn create(&self, record: ProviderRecord) -> Result<ProviderRecord, RepoError>;
+    async fn get(&self, id: Uuid) -> Result<Option<ProviderRecord>, RepoError>;
+    async fn get_by_name(&self, name: &str) -> Result<Option<ProviderRecord>, RepoError>;
+    async fn list(&self) -> Result<Vec<ProviderRecord>, RepoError>;
+    async fn delete(&self, id: Uuid) -> Result<(), RepoError>;
+    async fn get_default(&self) -> Result<Option<ProviderRecord>, RepoError>;
+}
+
+#[async_trait]
+impl ProviderConfigRepository for PgPersistence {
+    async fn create(&self, record: ProviderRecord) -> Result<ProviderRecord, RepoError> {
+        sqlx::query(
+            "INSERT INTO provider_configs (id, name, provider_type, base_url, model, api_key_secret_ref, capabilities, is_default)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        )
+        .bind(record.id)
+        .bind(&record.name)
+        .bind(&record.provider_type)
+        .bind(&record.base_url)
+        .bind(&record.model)
+        .bind(&record.api_key_secret_ref)
+        .bind(&record.capabilities)
+        .bind(record.is_default)
+        .execute(&self.pool)
+        .await?;
+        Ok(record)
+    }
+
+    async fn get(&self, id: Uuid) -> Result<Option<ProviderRecord>, RepoError> {
+        let row = sqlx::query(
+            "SELECT id, name, provider_type, base_url, model, api_key_secret_ref, capabilities, is_default
+             FROM provider_configs WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(row_to_provider).transpose()
+    }
+
+    async fn get_by_name(&self, name: &str) -> Result<Option<ProviderRecord>, RepoError> {
+        let row = sqlx::query(
+            "SELECT id, name, provider_type, base_url, model, api_key_secret_ref, capabilities, is_default
+             FROM provider_configs WHERE name = $1",
+        )
+        .bind(name)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(row_to_provider).transpose()
+    }
+
+    async fn list(&self) -> Result<Vec<ProviderRecord>, RepoError> {
+        sqlx::query(
+            "SELECT id, name, provider_type, base_url, model, api_key_secret_ref, capabilities, is_default
+             FROM provider_configs ORDER BY created_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(row_to_provider)
+        .collect()
+    }
+
+    async fn delete(&self, id: Uuid) -> Result<(), RepoError> {
+        sqlx::query("DELETE FROM provider_configs WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn get_default(&self) -> Result<Option<ProviderRecord>, RepoError> {
+        let row = sqlx::query(
+            "SELECT id, name, provider_type, base_url, model, api_key_secret_ref, capabilities, is_default
+             FROM provider_configs WHERE is_default = true LIMIT 1",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(row_to_provider).transpose()
+    }
+}
+
+fn row_to_provider(row: sqlx::postgres::PgRow) -> Result<ProviderRecord, RepoError> {
+    Ok(ProviderRecord {
+        id: row.try_get("id")?,
+        name: row.try_get("name")?,
+        provider_type: row.try_get("provider_type")?,
+        base_url: row.try_get("base_url")?,
+        model: row.try_get("model")?,
+        api_key_secret_ref: row.try_get("api_key_secret_ref")?,
+        capabilities: row.try_get("capabilities")?,
+        is_default: row.try_get("is_default")?,
+    })
+}
+
 #[derive(Debug, Error)]
 pub enum RepoError {
     #[error("not found")]

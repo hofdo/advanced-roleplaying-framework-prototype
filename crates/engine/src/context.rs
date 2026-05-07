@@ -1,6 +1,6 @@
 use domain::{
     Fact, FactVisibility, Faction, FactionState, Location, Npc, NpcStatus, QuestState, Scenario,
-    SceneReasoningStyle, WorldState,
+    SceneReasoningStyle, TurnMode, WorldState,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -185,6 +185,7 @@ pub struct AgentContext {
     pub recent_summary: Option<String>,
     pub recent_messages: Vec<MessageContext>,
     pub rules: Vec<String>,
+    pub mode: Option<TurnMode>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -212,6 +213,7 @@ pub struct BuildContextInput<'a> {
     pub active_role: RoleActivationContext,
     pub scene_directive: ReasoningStyleDirective,
     pub recent_messages: Vec<MessageContext>,
+    pub mode: Option<TurnMode>,
 }
 
 pub trait ContextBuilder: Send + Sync {
@@ -331,6 +333,7 @@ impl ContextBuilder for BasicContextBuilder {
                 .rev()
                 .collect(),
             rules: input.scenario.rules.clone(),
+            mode: input.mode,
         }
     }
 }
