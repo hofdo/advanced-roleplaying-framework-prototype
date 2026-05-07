@@ -405,7 +405,7 @@ async fn turn_stream(
             &delta_response.text,
             &input,
             &ViewerContext::player(),
-        ) {
+        ).await {
             Ok(finalized) => finalized,
             Err(error) => {
                 let _ = pipeline.store.persist_error_event(session_id, error.to_string()).await;
