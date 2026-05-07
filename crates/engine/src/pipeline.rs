@@ -143,9 +143,16 @@ where
         &self,
         session_id: SessionId,
         input: &str,
+        mode: Option<TurnMode>,
     ) -> Result<PreparedTurn, TurnPipelineError> {
         let loaded = self.store.load_turn_state(session_id).await?;
-        let scene_type = self.scene_classifier.classify(input, &loaded.world_state);
+        let classified = self.scene_classifier.classify(input, &loaded.world_state);
+        // TurnMode::Direct and TurnMode::Remember override the classified scene type.
+        let scene_type = match mode {
+            Some(TurnMode::Direct) => SceneReasoningStyle::RulesAdjudication,
+            Some(TurnMode::Remember) => SceneReasoningStyle::WorldSimulation,
+            _ => classified,
+        };
         let active_role =
             self.role_activator
                 .activate(&loaded.scenario, &loaded.world_state, scene_type);
@@ -163,6 +170,7 @@ where
                     content: message.content.clone(),
                 })
                 .collect(),
+            mode,
         });
         Ok(PreparedTurn {
             loaded,
@@ -313,7 +321,7 @@ where
 
         // --- Preparation: load state, classify scene, build context ---
         let prepared = self
-            .prepare_turn_context(request.session_id, &request.input)
+            .prepare_turn_context(request.session_id, &request.input, request.mode)
             .await?;
         tracing::info!("context_built");
 
@@ -675,7 +683,7 @@ mod tests {
         let pipeline = DefaultTurnPipeline::new(Arc::clone(&provider), Arc::clone(&store));
 
         let prepared = pipeline
-            .prepare_turn_context(session_id, "test input")
+            .prepare_turn_context(session_id, "test input", None)
             .await
             .expect("prepared");
 
@@ -723,7 +731,7 @@ mod tests {
         let pipeline = DefaultTurnPipeline::new(Arc::clone(&provider), Arc::clone(&store));
 
         let prepared = pipeline
-            .prepare_turn_context(session_id, "test input")
+            .prepare_turn_context(session_id, "test input", None)
             .await
             .expect("prepared");
 

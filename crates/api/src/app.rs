@@ -346,6 +346,7 @@ async fn turn_stream(
 
     let events = async_stream::stream! {
         let input = request.input;
+        let mode = request.mode;
         // Build a pipeline so all component logic (prepare / finalize) lives in
         // the engine crate rather than being duplicated here.
         let pipeline = DefaultTurnPipeline::with_lock(
@@ -363,7 +364,7 @@ async fn turn_stream(
         };
 
         // --- Preparation (lock, load, classify, context) ---
-        let prepared = match pipeline.prepare_turn_context(session_id, &input).await {
+        let prepared = match pipeline.prepare_turn_context(session_id, &input, mode).await {
             Ok(prepared) => prepared,
             Err(error) => {
                 yield Ok(error_event(error.to_string()));
