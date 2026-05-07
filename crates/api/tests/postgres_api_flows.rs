@@ -383,3 +383,176 @@ impl LlmProvider for BlockingProvider {
         Err(ProviderError::StreamingUnsupported)
     }
 }
+
+// ---------------------------------------------------------------------------
+// Phase 1.3 — export projection and raw_provider_output leak tests
+// ---------------------------------------------------------------------------
+
+/// Unit test: no Docker needed.
+/// Verifies that projecting a WorldState containing a GmOnly fact with
+/// ViewerContext::player() produces a FrontendVisibleState that excludes that
+/// fact entirely.
+#[test]
+fn export_projection_strips_gm_only_facts() {
+    use domain::{
+        Fact, FactSource, FactVisibility, Scenario, ScenarioType, ViewerContext, WorldState,
+    };
+    use engine::{BasicFrontendStateProjector, FrontendStateProjector};
+    use uuid::Uuid;
+
+    let scenario_id = Uuid::new_v4();
+    let scenario = Scenario {
+        id: scenario_id,
+        title: "Test Scenario".into(),
+        scenario_type: ScenarioType::Adventure,
+        setting: "test".into(),
+        tone: "neutral".into(),
+        rules: vec![],
+        locations: vec![],
+        factions: vec![],
+        npcs: vec![],
+        quests: vec![],
+        secrets: vec![],
+        clocks: vec![],
+    };
+    let world_state = WorldState {
+        session_id: Uuid::new_v4(),
+        scenario_id,
+        version: 1,
+        current_location_id: None,
+        current_scene: None,
+        active_speaker_id: None,
+        facts: vec![
+            Fact {
+                id: "player-fact".into(),
+                text: "The hero arrived at the city.".into(),
+                visibility: FactVisibility::PlayerKnown,
+                known_by: vec![],
+                source: FactSource::Scenario,
+                reveal_conditions: vec![],
+            },
+            Fact {
+                id: "gm-only-fact".into(),
+                text: "The villain controls the guild secretly.".into(),
+                visibility: FactVisibility::GmOnly,
+                known_by: vec![],
+                source: FactSource::Scenario,
+                reveal_conditions: vec![],
+            },
+        ],
+        npcs: vec![],
+        factions: vec![],
+        quests: vec![],
+        clocks: vec![],
+        relationships: vec![],
+        inventory: vec![],
+        summary: None,
+        recent_events: vec![],
+    };
+
+    let visible =
+        BasicFrontendStateProjector.project(&scenario, &world_state, &ViewerContext::player());
+
+    // Only the player-known fact must appear; the GM-only fact must be absent.
+    assert_eq!(visible.player_known_facts.len(), 1);
+    assert_eq!(visible.player_known_facts[0].id, "player-fact");
+    assert!(
+        visible
+            .player_known_facts
+            .iter()
+            .all(|f| f.id != "gm-only-fact"),
+        "GM-only fact must not appear in projected player state"
+    );
+}
+
+/// Integration test (requires Docker/testcontainers).
+/// Creates a session, runs a turn, then asserts:
+/// 1. The turn response JSON has no non-null `raw_provider_output` field.
+/// 2. The /export response JSON has no `raw_provider_output` field at all.
+/// 3. The /export response uses `visible_state` (not `world_state`).
+#[tokio::test]
+#[ignore = "requires docker daemon via testcontainers"]
+async fn turn_response_and_export_do_not_leak_raw_provider_output() {
+    let raw_turn = r#"{
+        "player_response": "The examiner nods cautiously.",
+        "world_state_delta": {
+            "facts_to_add": [],
+            "npc_changes": [],
+            "faction_changes": [],
+            "quest_changes": [],
+            "clock_changes": [],
+            "relationship_changes": [],
+            "location_change": null,
+            "event_log_entries": []
+        }
+    }"#;
+    let ctx = postgres_test_context(mock_provider([raw_turn.to_string()]))
+        .await
+        .expect("test context");
+    let scenario = sample_scenario();
+
+    send_json(
+        &ctx.router,
+        "POST",
+        "/scenarios",
+        serde_json::to_value(&scenario).unwrap(),
+    )
+    .await;
+    let (_, session_body) = send_json(
+        &ctx.router,
+        "POST",
+        "/sessions",
+        json!({ "scenario_id": scenario.id, "title": "Leak Test Session" }),
+    )
+    .await;
+    let session: persistence::SessionRecord = json_body(&session_body);
+
+    // Run a turn and check the turn response JSON.
+    let (turn_status, turn_body) = send_json(
+        &ctx.router,
+        "POST",
+        &format!("/sessions/{}/turn", session.id),
+        json!({ "input": "I greet the examiner.", "mode": "dialogue" }),
+    )
+    .await;
+    assert_eq!(turn_status, http::StatusCode::OK);
+    let turn_json: Value = json_body(&turn_body);
+
+    // raw_provider_output must either be absent or null in normal turn responses.
+    if let Some(rpo) = turn_json.get("raw_provider_output") {
+        assert!(
+            rpo.is_null(),
+            "raw_provider_output must be null or absent in turn response, got: {rpo}"
+        );
+    }
+
+    // Fetch the export and verify it uses visible_state, not world_state,
+    // and contains no raw_provider_output.
+    let (export_status, export_body) = send_empty(
+        &ctx.router,
+        "GET",
+        &format!("/sessions/{}/export", session.id),
+    )
+    .await;
+    assert_eq!(export_status, http::StatusCode::OK);
+    let export_json: Value = json_body(&export_body);
+
+    // Export must expose visible_state (projected), not the raw world_state.
+    assert!(
+        export_json.get("visible_state").is_some(),
+        "export response must contain visible_state"
+    );
+    assert!(
+        export_json.get("world_state").is_none(),
+        "export response must NOT contain raw world_state"
+    );
+
+    // No raw_provider_output anywhere in the export payload.
+    let export_str = String::from_utf8(export_body.to_vec()).expect("utf8");
+    assert!(
+        !export_str.contains("\"raw_provider_output\""),
+        "export response must not contain raw_provider_output field"
+    );
+
+    ctx.cleanup().await;
+}

@@ -41,11 +41,17 @@ pub fn app_router(app_state: AppState) -> Router {
             "/sessions/:session_id",
             get(get_session).delete(delete_session),
         )
-        .route("/sessions/:session_id/export", post(export_session))
+        .route("/sessions/:session_id/export", get(export_session))
         .route("/sessions/:session_id/turn", post(turn))
         .route("/sessions/:session_id/turn/stream", post(turn_stream))
         .route("/sessions/:session_id/world-state", get(get_world_state))
         .route("/sessions/:session_id/events", get(list_events))
+        // Raw (admin) export — returns the full WorldState without projection.
+        // TODO: guard with authentication before exposing in production.
+        .route(
+            "/admin/sessions/:session_id/export/raw",
+            get(export_session_raw),
+        )
         .with_state(app_state)
 }
 
@@ -193,18 +199,57 @@ async fn export_session(
     State(state): State<AppState>,
     Path(session_id): Path<SessionId>,
 ) -> Result<Json<ExportSessionResponse>, ApiError> {
+    let session = state
+        .store
+        .get_session(session_id)
+        .await?
+        .ok_or_else(ApiError::not_found)?;
+    let scenario = state
+        .store
+        .get_scenario(session.scenario_id)
+        .await?
+        .ok_or_else(ApiError::not_found)?;
+    let world_state = state
+        .store
+        .world_state(session_id)
+        .await?
+        .ok_or_else(ApiError::not_found)?;
+    let events = state.store.events(session_id).await?;
+    // Project using player context so GM-only facts and hidden world state
+    // are never exposed to the caller.
+    let visible_state = BasicFrontendStateProjector.project(
+        &scenario,
+        &world_state,
+        &ViewerContext::player(),
+    );
     Ok(Json(ExportSessionResponse {
-        session: state
-            .store
-            .get_session(session_id)
-            .await?
-            .ok_or_else(ApiError::not_found)?,
-        world_state: state
-            .store
-            .world_state(session_id)
-            .await?
-            .ok_or_else(ApiError::not_found)?,
-        events: state.store.events(session_id).await?,
+        session,
+        visible_state,
+        events,
+    }))
+}
+
+async fn export_session_raw(
+    State(state): State<AppState>,
+    Path(session_id): Path<SessionId>,
+) -> Result<Json<RawExportSessionResponse>, ApiError> {
+    // Returns full WorldState without projection. Intentionally unrestricted
+    // for this local prototype — add authentication before production use.
+    let session = state
+        .store
+        .get_session(session_id)
+        .await?
+        .ok_or_else(ApiError::not_found)?;
+    let world_state = state
+        .store
+        .world_state(session_id)
+        .await?
+        .ok_or_else(ApiError::not_found)?;
+    let events = state.store.events(session_id).await?;
+    Ok(Json(RawExportSessionResponse {
+        session,
+        world_state,
+        events,
     }))
 }
 
@@ -515,6 +560,13 @@ struct DeleteResponse {
 
 #[derive(Debug, Serialize)]
 struct ExportSessionResponse {
+    session: persistence::SessionRecord,
+    visible_state: domain::FrontendVisibleState,
+    events: Vec<persistence::EventRecord>,
+}
+
+#[derive(Debug, Serialize)]
+struct RawExportSessionResponse {
     session: persistence::SessionRecord,
     world_state: domain::WorldState,
     events: Vec<persistence::EventRecord>,
