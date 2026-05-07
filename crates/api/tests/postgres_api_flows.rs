@@ -393,6 +393,223 @@ impl LlmProvider for BlockingProvider {
 }
 
 // ---------------------------------------------------------------------------
+// Behavioral validation tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires docker daemon via testcontainers"]
+async fn delta_with_unknown_npc_id_returns_422() {
+    let bad_delta = r#"{
+        "player_response": "The examiner nods.",
+        "world_state_delta": {
+            "facts_to_add": [],
+            "npc_changes": [{"type":"attitude_changed","npc_id":"nonexistent-npc","attitude":"hostile","reason":"provoked"}],
+            "faction_changes": [],
+            "quest_changes": [],
+            "clock_changes": [],
+            "relationship_changes": [],
+            "location_change": null,
+            "event_log_entries": []
+        }
+    }"#;
+    let ctx = postgres_test_context(mock_provider([bad_delta.to_string()]))
+        .await
+        .expect("test context");
+    let scenario = sample_scenario();
+
+    send_json(&ctx.router, "POST", "/scenarios", serde_json::to_value(&scenario).unwrap()).await;
+    let (_, session_body) = send_json(
+        &ctx.router,
+        "POST",
+        "/sessions",
+        json!({ "scenario_id": scenario.id, "title": "Validation Test" }),
+    )
+    .await;
+    let session: persistence::SessionRecord = json_body(&session_body);
+
+    let (status, _) = send_json(
+        &ctx.router,
+        "POST",
+        &format!("/sessions/{}/turn", session.id),
+        json!({ "input": "I greet them.", "mode": "dialogue" }),
+    )
+    .await;
+
+    assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
+    ctx.cleanup().await;
+}
+
+#[tokio::test]
+#[ignore = "requires docker daemon via testcontainers"]
+async fn dead_npc_attitude_change_returns_422() {
+    use domain::{NpcStatus, WorldState};
+
+    // Use a custom provider response that tries to change attitude of the examiner NPC.
+    // We need to put the examiner into Dead status first via a valid turn,
+    // then try to change its attitude.
+    let kill_turn = r#"{
+        "player_response": "The examiner collapses.",
+        "world_state_delta": {
+            "facts_to_add": [],
+            "npc_changes": [{"type":"status_changed","npc_id":"examiner","status":"dead","reason":"slain by player"}],
+            "faction_changes": [],
+            "quest_changes": [],
+            "clock_changes": [],
+            "relationship_changes": [],
+            "location_change": null,
+            "event_log_entries": ["Examiner slain."]
+        }
+    }"#;
+    let invalid_turn = r#"{
+        "player_response": "The dead examiner somehow reacts.",
+        "world_state_delta": {
+            "facts_to_add": [],
+            "npc_changes": [{"type":"attitude_changed","npc_id":"examiner","attitude":"friendly","reason":"somehow not dead"}],
+            "faction_changes": [],
+            "quest_changes": [],
+            "clock_changes": [],
+            "relationship_changes": [],
+            "location_change": null,
+            "event_log_entries": []
+        }
+    }"#;
+    let ctx = postgres_test_context(mock_provider([kill_turn.to_string(), invalid_turn.to_string()]))
+        .await
+        .expect("test context");
+    let scenario = sample_scenario();
+
+    send_json(&ctx.router, "POST", "/scenarios", serde_json::to_value(&scenario).unwrap()).await;
+    let (_, session_body) = send_json(
+        &ctx.router,
+        "POST",
+        "/sessions",
+        json!({ "scenario_id": scenario.id, "title": "Dead NPC Test" }),
+    )
+    .await;
+    let session: persistence::SessionRecord = json_body(&session_body);
+
+    // First turn: kill the examiner.
+    let (kill_status, _) = send_json(
+        &ctx.router,
+        "POST",
+        &format!("/sessions/{}/turn", session.id),
+        json!({ "input": "I attack the examiner.", "mode": "action" }),
+    )
+    .await;
+    assert_eq!(kill_status, http::StatusCode::OK, "kill turn must succeed");
+
+    // Verify examiner is now dead in world state.
+    let world_state: WorldState = {
+        let (_, body) = send_empty(
+            &ctx.router,
+            "GET",
+            &format!("/admin/sessions/{}/export/raw", session.id),
+        )
+        .await;
+        let v: Value = json_body(&body);
+        serde_json::from_value(v["world_state"].clone()).expect("world state")
+    };
+    let examiner = world_state.npcs.iter().find(|n| n.npc_id == "examiner").expect("examiner");
+    assert_eq!(examiner.status, NpcStatus::Dead);
+
+    // Second turn: try to change dead NPC's attitude — must be rejected.
+    let (status, _) = send_json(
+        &ctx.router,
+        "POST",
+        &format!("/sessions/{}/turn", session.id),
+        json!({ "input": "I talk to the corpse.", "mode": "dialogue" }),
+    )
+    .await;
+
+    assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
+    ctx.cleanup().await;
+}
+
+#[tokio::test]
+#[ignore = "requires docker daemon via testcontainers"]
+async fn provider_failure_returns_502() {
+    // Empty provider queue → NoMockResponse → maps to ProviderError → 502 Bad Gateway.
+    let ctx = postgres_test_context(mock_provider(Vec::<String>::new()))
+        .await
+        .expect("test context");
+    let scenario = sample_scenario();
+
+    send_json(&ctx.router, "POST", "/scenarios", serde_json::to_value(&scenario).unwrap()).await;
+    let (_, session_body) = send_json(
+        &ctx.router,
+        "POST",
+        "/sessions",
+        json!({ "scenario_id": scenario.id, "title": "Provider Fail Test" }),
+    )
+    .await;
+    let session: persistence::SessionRecord = json_body(&session_body);
+
+    let (status, _) = send_json(
+        &ctx.router,
+        "POST",
+        &format!("/sessions/{}/turn", session.id),
+        json!({ "input": "I look around.", "mode": "action" }),
+    )
+    .await;
+
+    assert_eq!(status, http::StatusCode::BAD_GATEWAY);
+    ctx.cleanup().await;
+}
+
+#[tokio::test]
+#[ignore = "requires docker daemon via testcontainers"]
+async fn debug_turn_returns_applied_delta() {
+    let raw = r#"{
+        "player_response": "The examiner nods cautiously.",
+        "world_state_delta": {
+            "facts_to_add": [],
+            "npc_changes": [],
+            "faction_changes": [{"type":"standing_changed","faction_id":"guild","standing_delta":-2,"reason":"Suspicious behaviour."}],
+            "quest_changes": [],
+            "clock_changes": [],
+            "relationship_changes": [],
+            "location_change": null,
+            "event_log_entries": []
+        }
+    }"#;
+    let ctx = postgres_test_context(mock_provider([raw.to_string()]))
+        .await
+        .expect("test context");
+    let scenario = sample_scenario();
+
+    send_json(&ctx.router, "POST", "/scenarios", serde_json::to_value(&scenario).unwrap()).await;
+    let (_, session_body) = send_json(
+        &ctx.router,
+        "POST",
+        "/sessions",
+        json!({ "scenario_id": scenario.id, "title": "Debug Turn Test" }),
+    )
+    .await;
+    let session: persistence::SessionRecord = json_body(&session_body);
+
+    let (status, body) = send_json(
+        &ctx.router,
+        "POST",
+        &format!("/admin/sessions/{}/turn/debug", session.id),
+        json!({ "input": "I greet the examiner.", "mode": "dialogue" }),
+    )
+    .await;
+    let response: Value = json_body(&body);
+
+    assert_eq!(status, http::StatusCode::OK);
+    assert!(
+        response.get("applied_delta").is_some(),
+        "debug response must contain applied_delta"
+    );
+    assert!(
+        response["applied_delta"]["faction_changes"].is_array(),
+        "applied_delta must include faction_changes array"
+    );
+    assert_eq!(response["world_state_version"], 1);
+    ctx.cleanup().await;
+}
+
+// ---------------------------------------------------------------------------
 // Phase 1.3 — export projection and raw_provider_output leak tests
 // ---------------------------------------------------------------------------
 

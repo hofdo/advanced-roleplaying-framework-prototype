@@ -38,6 +38,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 utoipa = { version = "5", features = ["axum_extras", "uuid"] }
 uuid = { version = "1", features = ["serde", "v4"] }
 validator = { version = "0.20", features = ["derive"] }
+wiremock = "0.6"
 
 domain = { path = "crates/domain" }
 engine = { path = "crates/engine" }
