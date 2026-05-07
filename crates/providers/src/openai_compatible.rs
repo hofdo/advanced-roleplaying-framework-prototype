@@ -1,6 +1,6 @@
 use crate::{
-    LlmProvider, LlmRequest, LlmResponse, ProviderCapabilities, ProviderError, ProviderHealth,
-    TokenStream,
+    is_retryable, LlmProvider, LlmRequest, LlmResponse, ProviderCapabilities, ProviderError,
+    ProviderHealth, ProviderReadiness, TokenStream,
 };
 use async_stream::try_stream;
 use async_trait::async_trait;
@@ -85,6 +85,9 @@ impl OpenAiCompatibleProvider {
 
         if !response.status().is_success() {
             let status = response.status();
+            if status == StatusCode::TOO_MANY_REQUESTS {
+                return Err(ProviderError::RateLimit);
+            }
             let body = response.text().await.unwrap_or_default();
             return Err(ProviderError::Status {
                 status: status.as_u16(),
@@ -94,24 +97,9 @@ impl OpenAiCompatibleProvider {
 
         Ok(response)
     }
-}
 
-#[async_trait]
-impl LlmProvider for OpenAiCompatibleProvider {
-    async fn health(&self) -> Result<ProviderHealth, ProviderError> {
-        Ok(ProviderHealth {
-            name: self.name.clone(),
-            ok: true,
-            message: Some("configured".into()),
-        })
-    }
-
-    fn capabilities(&self) -> ProviderCapabilities {
-        self.capabilities.clone()
-    }
-
-    async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, ProviderError> {
-        let body = self.request_body(&request, false);
+    async fn try_generate(&self, request: &LlmRequest) -> Result<LlmResponse, ProviderError> {
+        let body = self.request_body(request, false);
         let raw: Value = self
             .post_chat(body)
             .await?
@@ -132,37 +120,125 @@ impl LlmProvider for OpenAiCompatibleProvider {
         })
     }
 
+    async fn try_stream_response(
+        &self,
+        request: &LlmRequest,
+    ) -> Result<reqwest::Response, ProviderError> {
+        let body = self.request_body(request, true);
+        self.post_chat(body).await
+    }
+}
+
+#[async_trait]
+impl LlmProvider for OpenAiCompatibleProvider {
+    async fn health(&self) -> Result<ProviderHealth, ProviderError> {
+        let ok = !self.base_url.is_empty() && !self.name.is_empty();
+        let message = if ok {
+            "provider configured".into()
+        } else {
+            "provider not configured: base_url or name is empty".into()
+        };
+        Ok(ProviderHealth {
+            name: self.name.clone(),
+            ok,
+            message: Some(message),
+        })
+    }
+
+    async fn readiness(&self) -> Result<ProviderReadiness, ProviderError> {
+        let configured = !self.base_url.is_empty() && !self.name.is_empty();
+        if !configured {
+            return Ok(ProviderReadiness {
+                configured: false,
+                reachable: false,
+                message: "Provider not configured".into(),
+            });
+        }
+        match self.client.get(&self.base_url).send().await {
+            Ok(_) => Ok(ProviderReadiness {
+                configured: true,
+                reachable: true,
+                message: "Provider reachable".into(),
+            }),
+            Err(e) if e.is_connect() || e.is_timeout() => Ok(ProviderReadiness {
+                configured: true,
+                reachable: false,
+                message: format!("Provider not reachable: {e}"),
+            }),
+            Err(_) => Ok(ProviderReadiness {
+                configured: true,
+                reachable: true,
+                message: "Provider reachable (returned error response)".into(),
+            }),
+        }
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        self.capabilities.clone()
+    }
+
+    async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, ProviderError> {
+        let max_attempts = u32::from(self.capabilities.max_retries) + 1;
+        for attempt in 0..max_attempts {
+            match self.try_generate(&request).await {
+                Ok(response) => return Ok(response),
+                Err(error) if !is_retryable(&error) => return Err(error),
+                Err(error) if attempt + 1 == max_attempts => return Err(error),
+                Err(_) => {
+                    let delay_ms = std::cmp::min(100 * (1u64 << attempt), 2000);
+                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                }
+            }
+        }
+        // Unreachable: the loop always returns or falls into the Err branch on the last attempt.
+        unreachable!("retry loop exhausted without returning")
+    }
+
     async fn stream(&self, request: LlmRequest) -> Result<TokenStream, ProviderError> {
         if !self.capabilities.supports_streaming {
             return Err(ProviderError::StreamingUnsupported);
         }
 
-        let response = self.post_chat(self.request_body(&request, true)).await?;
-        let stream = response.bytes_stream();
-
-        Ok(Box::pin(try_stream! {
-            futures::pin_mut!(stream);
-            while let Some(chunk) = stream.next().await {
-                let bytes = chunk.map_err(|error| map_reqwest_error(&error))?;
-                let text = String::from_utf8_lossy(&bytes);
-                for line in text.lines() {
-                    let Some(data) = line.strip_prefix("data: ") else {
-                        continue;
-                    };
-                    if data.trim() == "[DONE]" {
-                        continue;
-                    }
-                    let value: Value = serde_json::from_str(data)
-                        .map_err(|error| ProviderError::MalformedResponse(error.to_string()))?;
-                    if let Some(token) = value
-                        .pointer("/choices/0/delta/content")
-                        .and_then(Value::as_str)
-                    {
-                        yield token.to_owned();
-                    }
+        let max_attempts = u32::from(self.capabilities.max_retries) + 1;
+        let mut last_error = ProviderError::Transport("no attempt made".into());
+        for attempt in 0..max_attempts {
+            match self.try_stream_response(&request).await {
+                Ok(response) => {
+                    let stream = response.bytes_stream();
+                    return Ok(Box::pin(try_stream! {
+                        futures::pin_mut!(stream);
+                        while let Some(chunk) = stream.next().await {
+                            let bytes = chunk.map_err(|error| map_reqwest_error(&error))?;
+                            let text = String::from_utf8_lossy(&bytes);
+                            for line in text.lines() {
+                                let Some(data) = line.strip_prefix("data: ") else {
+                                    continue;
+                                };
+                                if data.trim() == "[DONE]" {
+                                    continue;
+                                }
+                                let value: Value = serde_json::from_str(data)
+                                    .map_err(|error| ProviderError::MalformedResponse(error.to_string()))?;
+                                if let Some(token) = value
+                                    .pointer("/choices/0/delta/content")
+                                    .and_then(Value::as_str)
+                                {
+                                    yield token.to_owned();
+                                }
+                            }
+                        }
+                    }));
+                }
+                Err(error) if !is_retryable(&error) => return Err(error),
+                Err(error) if attempt + 1 == max_attempts => return Err(error),
+                Err(error) => {
+                    last_error = error;
+                    let delay_ms = std::cmp::min(100 * (1u64 << attempt), 2000);
+                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
                 }
             }
-        }))
+        }
+        Err(last_error)
     }
 }
 
@@ -205,6 +281,39 @@ mod tests {
     use super::*;
     use crate::{LlmMessage, LlmMessageRole};
 
+    #[tokio::test]
+    async fn health_returns_ok_true_when_base_url_set() {
+        let provider = OpenAiCompatibleProvider::new(
+            "local",
+            "http://localhost:8081/v1/",
+            None,
+            "local-model",
+            ProviderCapabilities::default(),
+        )
+        .expect("provider");
+
+        let health = provider.health().await.expect("health");
+
+        assert!(health.ok);
+        assert_eq!(health.name, "local");
+    }
+
+    #[tokio::test]
+    async fn health_returns_ok_false_when_base_url_empty() {
+        let provider = OpenAiCompatibleProvider::new(
+            "local",
+            "",
+            None,
+            "local-model",
+            ProviderCapabilities::default(),
+        )
+        .expect("provider");
+
+        let health = provider.health().await.expect("health");
+
+        assert!(!health.ok);
+    }
+
     #[test]
     fn request_body_uses_json_mode_only_when_supported() {
         let provider = OpenAiCompatibleProvider::new(
@@ -236,5 +345,92 @@ mod tests {
         );
         assert!(body.response_format.is_some());
         assert_eq!(body.messages[0].role, "system");
+    }
+
+    // ── is_retryable classification ──────────────────────────────────────────
+
+    #[test]
+    fn transport_error_is_retryable() {
+        assert!(is_retryable(&ProviderError::Transport("connection refused".into())));
+    }
+
+    #[test]
+    fn timeout_is_retryable() {
+        assert!(is_retryable(&ProviderError::Timeout));
+    }
+
+    #[test]
+    fn rate_limit_is_retryable() {
+        assert!(is_retryable(&ProviderError::RateLimit));
+    }
+
+    #[test]
+    fn http_429_status_is_retryable() {
+        assert!(is_retryable(&ProviderError::Status {
+            status: 429,
+            body: String::new(),
+        }));
+    }
+
+    #[test]
+    fn http_503_is_retryable() {
+        assert!(is_retryable(&ProviderError::Status {
+            status: 503,
+            body: String::new(),
+        }));
+    }
+
+    #[test]
+    fn http_400_is_not_retryable() {
+        assert!(!is_retryable(&ProviderError::Status {
+            status: 400,
+            body: String::new(),
+        }));
+    }
+
+    #[test]
+    fn malformed_response_is_not_retryable() {
+        assert!(!is_retryable(&ProviderError::MalformedResponse(
+            "invalid json".into()
+        )));
+    }
+
+    #[test]
+    fn streaming_unsupported_is_not_retryable() {
+        assert!(!is_retryable(&ProviderError::StreamingUnsupported));
+    }
+
+    // ── max_retries=0 means a single attempt ─────────────────────────────────
+
+    #[tokio::test]
+    async fn max_retries_zero_makes_single_attempt() {
+        // We test with a real provider but a URL that will fail immediately.
+        // With max_retries=0, generate() must return on the very first failure
+        // with no sleep (test must complete in well under 1 s).
+        let provider = OpenAiCompatibleProvider::new(
+            "local",
+            "http://127.0.0.1:1", // nothing listening on port 1
+            None,
+            "test-model",
+            ProviderCapabilities {
+                max_retries: 0,
+                request_timeout_seconds: 1,
+                ..ProviderCapabilities::default()
+            },
+        )
+        .expect("provider");
+
+        let request = LlmRequest {
+            messages: vec![LlmMessage {
+                role: LlmMessageRole::User,
+                content: "hello".into(),
+            }],
+            temperature: None,
+            max_tokens: None,
+            json_mode: false,
+        };
+
+        let result = provider.generate(request).await;
+        assert!(result.is_err(), "expected error from unreachable host");
     }
 }

@@ -7,13 +7,8 @@ use axum::{
 };
 use domain::{Scenario, SessionId, TurnMode, ViewerContext};
 use engine::{
-    BasicContextBuilder, BasicDeltaValidator, BasicFrontendStateProjector,
-    BasicHiddenReasoningStripper, BasicPromptBuilder, BasicReasoningStyleOptimizer,
-    BasicRoleIdentityActivator, BasicWorldStateReducer, BuildContextInput, ContextBuilder,
-    DefaultTurnPipeline, DeltaValidator, FrontendStateProjector, HiddenReasoningStripper,
-    PROMPT_TEMPLATE_VERSION, PromptBuilder, ReasoningStyleOptimizer, ResponseParser,
-    RoleIdentityActivator, RuleBasedSceneClassifier, SceneClassifier, SessionTurnLock,
-    TurnRequestInput, WorldStateReducer,
+    BasicFrontendStateProjector, DefaultTurnPipeline, FrontendStateProjector,
+    HiddenReasoningStripper, PromptBuilder, SessionTurnLock, TurnRequestInput,
 };
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -25,6 +20,8 @@ pub fn app_router(app_state: AppState) -> Router {
         .route("/health", get(health))
         .route("/providers", get(list_providers))
         .route("/providers/test", post(test_provider))
+        .route("/providers/health", get(provider_health))
+        .route("/providers/readiness", get(provider_readiness))
         .route(
             "/sessions/:session_id/provider",
             patch(set_session_provider),
@@ -41,11 +38,17 @@ pub fn app_router(app_state: AppState) -> Router {
             "/sessions/:session_id",
             get(get_session).delete(delete_session),
         )
-        .route("/sessions/:session_id/export", post(export_session))
+        .route("/sessions/:session_id/export", get(export_session))
         .route("/sessions/:session_id/turn", post(turn))
         .route("/sessions/:session_id/turn/stream", post(turn_stream))
         .route("/sessions/:session_id/world-state", get(get_world_state))
         .route("/sessions/:session_id/events", get(list_events))
+        // Raw (admin) export — returns the full WorldState without projection.
+        // TODO: guard with authentication before exposing in production.
+        .route(
+            "/admin/sessions/:session_id/export/raw",
+            get(export_session_raw),
+        )
         .with_state(app_state)
 }
 
@@ -82,20 +85,48 @@ async fn test_provider(
     }))
 }
 
+async fn provider_health(
+    State(state): State<AppState>,
+) -> Result<Json<ProviderHealthResponse>, ApiError> {
+    let health = state
+        .provider
+        .health()
+        .await
+        .map_err(engine::TurnPipelineError::from)?;
+    Ok(Json(ProviderHealthResponse {
+        name: health.name,
+        ok: health.ok,
+        message: health.message.unwrap_or_else(|| "configured".into()),
+    }))
+}
+
+async fn provider_readiness(
+    State(state): State<AppState>,
+) -> Result<Json<ProviderReadinessResponse>, ApiError> {
+    let readiness = state
+        .provider
+        .readiness()
+        .await
+        .map_err(engine::TurnPipelineError::from)?;
+    Ok(Json(ProviderReadinessResponse {
+        configured: readiness.configured,
+        reachable: readiness.reachable,
+        message: readiness.message,
+    }))
+}
+
 async fn set_session_provider(
-    Path(_session_id): Path<SessionId>,
+    State(state): State<AppState>,
+    Path(session_id): Path<SessionId>,
     Json(request): Json<SetProviderRequest>,
-) -> Json<ProviderTestResponse> {
-    let selected = request
-        .provider_name
-        .or_else(|| request.provider_id.map(|id| id.to_string()))
-        .unwrap_or_else(|| "configured default".into());
-    Json(ProviderTestResponse {
-        ok: true,
-        message: format!(
-            "session provider selection accepted for {selected}; in-memory API uses configured default provider"
-        ),
-    })
+) -> Result<Json<persistence::SessionRecord>, ApiError> {
+    let provider_id = request.provider_id;
+    state
+        .store
+        .set_session_provider(session_id, provider_id)
+        .await?
+        .map(Json)
+        .ok_or_else(ApiError::not_found)
 }
 
 async fn create_scenario(
@@ -195,18 +226,57 @@ async fn export_session(
     State(state): State<AppState>,
     Path(session_id): Path<SessionId>,
 ) -> Result<Json<ExportSessionResponse>, ApiError> {
+    let session = state
+        .store
+        .get_session(session_id)
+        .await?
+        .ok_or_else(ApiError::not_found)?;
+    let scenario = state
+        .store
+        .get_scenario(session.scenario_id)
+        .await?
+        .ok_or_else(ApiError::not_found)?;
+    let world_state = state
+        .store
+        .world_state(session_id)
+        .await?
+        .ok_or_else(ApiError::not_found)?;
+    let events = state.store.events(session_id).await?;
+    // Project using player context so GM-only facts and hidden world state
+    // are never exposed to the caller.
+    let visible_state = BasicFrontendStateProjector.project(
+        &scenario,
+        &world_state,
+        &ViewerContext::player(),
+    );
     Ok(Json(ExportSessionResponse {
-        session: state
-            .store
-            .get_session(session_id)
-            .await?
-            .ok_or_else(ApiError::not_found)?,
-        world_state: state
-            .store
-            .world_state(session_id)
-            .await?
-            .ok_or_else(ApiError::not_found)?,
-        events: state.store.events(session_id).await?,
+        session,
+        visible_state,
+        events,
+    }))
+}
+
+async fn export_session_raw(
+    State(state): State<AppState>,
+    Path(session_id): Path<SessionId>,
+) -> Result<Json<RawExportSessionResponse>, ApiError> {
+    // Returns full WorldState without projection. Intentionally unrestricted
+    // for this local prototype — add authentication before production use.
+    let session = state
+        .store
+        .get_session(session_id)
+        .await?
+        .ok_or_else(ApiError::not_found)?;
+    let world_state = state
+        .store
+        .world_state(session_id)
+        .await?
+        .ok_or_else(ApiError::not_found)?;
+    let events = state.store.events(session_id).await?;
+    Ok(Json(RawExportSessionResponse {
+        session,
+        world_state,
+        events,
     }))
 }
 
@@ -215,8 +285,22 @@ async fn turn(
     Path(session_id): Path<SessionId>,
     Json(request): Json<TurnRequest>,
 ) -> Result<Json<TurnResponseBody>, ApiError> {
+    // Resolve provider: session-scoped override takes priority over default
+    let session = state
+        .store
+        .get_session(session_id)
+        .await?
+        .ok_or_else(ApiError::not_found)?;
+    let provider = if session.provider_id.is_some() {
+        // Session has a provider override — currently only the default provider
+        // is instantiated, so we fall back to it. When a provider registry is
+        // added this is where the lookup will go.
+        Arc::clone(&state.provider)
+    } else {
+        Arc::clone(&state.provider)
+    };
     let pipeline = DefaultTurnPipeline::with_lock(
-        Arc::clone(&state.provider),
+        provider,
         Arc::clone(&state.store),
         state.turn_lock.clone(),
     );
@@ -243,13 +327,34 @@ async fn turn_stream(
     Path(session_id): Path<SessionId>,
     Json(request): Json<TurnRequest>,
 ) -> Sse<impl futures::Stream<Item = Result<Event, Infallible>>> {
+    // Resolve provider: session-scoped override takes priority over default.
+    // Load session before entering the stream so we can pick the right provider.
+    let resolved_provider = match state.store.get_session(session_id).await {
+        Ok(Some(session)) => {
+            if session.provider_id.is_some() {
+                // Session has a provider override — currently only the default provider
+                // is instantiated, so we fall back to it. When a provider registry is
+                // added this is where the lookup will go.
+                Arc::clone(&state.provider)
+            } else {
+                Arc::clone(&state.provider)
+            }
+        }
+        Ok(None) => Arc::clone(&state.provider),
+        Err(_) => Arc::clone(&state.provider),
+    };
+
     let events = async_stream::stream! {
         let input = request.input;
-        let provider = Arc::clone(&state.provider);
-        let store = Arc::clone(&state.store);
-        let turn_lock = state.turn_lock.clone();
+        // Build a pipeline so all component logic (prepare / finalize) lives in
+        // the engine crate rather than being duplicated here.
+        let pipeline = DefaultTurnPipeline::with_lock(
+            Arc::clone(&resolved_provider),
+            Arc::clone(&state.store),
+            state.turn_lock.clone(),
+        );
 
-        let _guard = match turn_lock.acquire(session_id).await {
+        let _guard = match pipeline.turn_lock.acquire(session_id).await {
             Ok(guard) => guard,
             Err(error) => {
                 yield Ok(error_event(error.to_string()));
@@ -257,45 +362,18 @@ async fn turn_stream(
             }
         };
 
-        let loaded = match store.load_turn_state(session_id).await {
-            Ok(loaded) => loaded,
+        // --- Preparation (lock, load, classify, context) ---
+        let prepared = match pipeline.prepare_turn_context(session_id, &input).await {
+            Ok(prepared) => prepared,
             Err(error) => {
                 yield Ok(error_event(error.to_string()));
                 return;
             }
         };
 
-        let scene_classifier = RuleBasedSceneClassifier;
-        let role_activator = BasicRoleIdentityActivator;
-        let reasoning_optimizer = BasicReasoningStyleOptimizer;
-        let context_builder = BasicContextBuilder;
-        let prompt_builder = BasicPromptBuilder;
-        let parser = engine::JsonResponseParser;
-        let stripper = BasicHiddenReasoningStripper;
-        let validator = BasicDeltaValidator;
-        let reducer = BasicWorldStateReducer;
-        let projector = BasicFrontendStateProjector;
-
-        let scene_type = scene_classifier.classify(&input, &loaded.world_state);
-        let active_role = role_activator.activate(&loaded.scenario, &loaded.world_state, scene_type);
-        let scene_directive = reasoning_optimizer.directive_for(scene_type);
-        let context = context_builder.build(BuildContextInput {
-            scenario: &loaded.scenario,
-            world_state: &loaded.world_state,
-            active_role,
-            scene_directive,
-            recent_messages: loaded
-                .recent_messages
-                .iter()
-                .map(|message| engine::MessageContext {
-                    role: format!("{:?}", message.role),
-                    content: message.content.clone(),
-                })
-                .collect(),
-        });
-
-        let token_stream = match provider
-            .stream(prompt_builder.build_streaming_prompt(&context, &input))
+        // --- Streaming (unique to this path) ---
+        let token_stream = match resolved_provider
+            .stream(pipeline.prompt_builder.build_streaming_prompt(&prepared.context, &input))
             .await
         {
             Ok(stream) => stream,
@@ -306,7 +384,7 @@ async fn turn_stream(
         };
 
         futures::pin_mut!(token_stream);
-        let mut visible_response = String::new();
+        let mut raw_response = String::new();
         while let Some(token) = token_stream.next().await {
             match token {
                 Ok(token) => {
@@ -318,7 +396,7 @@ async fn turn_stream(
                     {
                         continue;
                     }
-                    visible_response.push_str(&token);
+                    raw_response.push_str(&token);
                     yield Ok(Event::default()
                         .event("token")
                         .json_data(TokenEvent { text: token })
@@ -331,66 +409,54 @@ async fn turn_stream(
             }
         }
 
-        let visible_response = stripper.strip(&visible_response);
-        let delta_response = match provider
-            .generate(prompt_builder.build_delta_extraction_prompt(&context, &input, &visible_response))
+        // Strip hidden reasoning from the accumulated tokens, then call the
+        // provider a second time to extract a typed WorldStateDelta from the
+        // narration (streaming path can't emit JSON inline).
+        let visible_response = pipeline.stripper.strip(&raw_response);
+        let delta_response = match resolved_provider
+            .generate(pipeline.prompt_builder.build_delta_extraction_prompt(
+                &prepared.context,
+                &input,
+                &visible_response,
+            ))
             .await
         {
             Ok(response) => response,
             Err(error) => {
-                let _ = store.persist_error_event(session_id, error.to_string()).await;
+                let _ = pipeline.store.persist_error_event(session_id, error.to_string()).await;
                 yield Ok(error_event(error.to_string()));
                 return;
             }
         };
-        let delta = match parser.parse_delta_output(&delta_response.text) {
-            Ok(delta) => delta,
-            Err(error) => {
-                let _ = store.persist_error_event(session_id, error.to_string()).await;
-                yield Ok(error_event(error.to_string()));
-                return;
-            }
-        };
-        let validated_delta = match validator.validate(&loaded.scenario, &loaded.world_state, &delta) {
-            Ok(delta) => delta,
-            Err(error) => {
-                let _ = store.persist_error_event(session_id, error.to_string()).await;
-                yield Ok(error_event(error.to_string()));
-                return;
-            }
-        };
-        let updated_state = reducer.apply(loaded.world_state.clone(), validated_delta.clone());
-        let frontend_state_patch = projector.patch_from_delta(
-            &loaded.scenario,
-            &updated_state,
-            &validated_delta,
-            &ViewerContext::player(),
-        );
-        let user_message = domain::MessageRecord {
-            id: Uuid::new_v4(),
-            session_id,
-            role: domain::MessageRole::User,
-            speaker_id: None,
-            content: input,
-            scene_type: Some(scene_type),
-            prompt_template_version: None,
-            raw_provider_output: None,
-        };
-        let assistant_message = domain::MessageRecord {
-            id: Uuid::new_v4(),
-            session_id,
-            role: domain::MessageRole::Assistant,
-            speaker_id: loaded.world_state.active_speaker_id,
-            content: visible_response,
-            scene_type: Some(scene_type),
-            prompt_template_version: Some(PROMPT_TEMPLATE_VERSION.into()),
-            raw_provider_output: None,
-        };
-        let message_id = assistant_message.id;
-        let world_state_version = updated_state.version;
 
-        if let Err(error) = store
-            .persist_successful_turn(user_message, assistant_message, validated_delta, updated_state)
+        // --- Finalization (validate, reduce, project, build message records) ---
+        let finalized = match pipeline.finalize_turn_delta(
+            session_id,
+            &prepared,
+            &visible_response,
+            &delta_response.text,
+            &input,
+            &ViewerContext::player(),
+        ).await {
+            Ok(finalized) => finalized,
+            Err(error) => {
+                let _ = pipeline.store.persist_error_event(session_id, error.to_string()).await;
+                yield Ok(error_event(error.to_string()));
+                return;
+            }
+        };
+
+        let message_id = finalized.assistant_message.id;
+        let world_state_version = finalized.world_state_version;
+        let frontend_state_patch = finalized.frontend_state_patch.clone();
+
+        if let Err(error) = pipeline.store
+            .persist_successful_turn(
+                finalized.user_message,
+                finalized.assistant_message,
+                finalized.validated_delta,
+                finalized.updated_world_state,
+            )
             .await
         {
             yield Ok(error_event(error.to_string()));
@@ -451,6 +517,20 @@ struct ProviderTestResponse {
     message: String,
 }
 
+#[derive(Debug, Serialize)]
+struct ProviderHealthResponse {
+    name: String,
+    ok: bool,
+    message: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ProviderReadinessResponse {
+    configured: bool,
+    reachable: bool,
+    message: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct SetProviderRequest {
     provider_id: Option<Uuid>,
@@ -486,6 +566,13 @@ struct DeleteResponse {
 
 #[derive(Debug, Serialize)]
 struct ExportSessionResponse {
+    session: persistence::SessionRecord,
+    visible_state: domain::FrontendVisibleState,
+    events: Vec<persistence::EventRecord>,
+}
+
+#[derive(Debug, Serialize)]
+struct RawExportSessionResponse {
     session: persistence::SessionRecord,
     world_state: domain::WorldState,
     events: Vec<persistence::EventRecord>,

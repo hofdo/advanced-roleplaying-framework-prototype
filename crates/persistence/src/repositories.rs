@@ -55,6 +55,11 @@ pub trait SessionRepository: Send + Sync {
     async fn get(&self, id: SessionId) -> Result<Option<SessionRecord>, RepoError>;
     async fn list(&self) -> Result<Vec<SessionRecord>, RepoError>;
     async fn delete(&self, id: SessionId) -> Result<(), RepoError>;
+    async fn set_provider(
+        &self,
+        session_id: SessionId,
+        provider_id: Option<uuid::Uuid>,
+    ) -> Result<SessionRecord, RepoError>;
 }
 
 #[async_trait]
@@ -101,6 +106,7 @@ pub struct SessionRecord {
     pub scenario_id: ScenarioId,
     pub title: String,
     pub status: String,
+    pub provider_id: Option<uuid::Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -206,24 +212,29 @@ impl SessionRepository for PgPersistence {
             scenario_id,
             title,
             status: "active".into(),
+            provider_id: None,
         })
     }
 
     async fn get(&self, id: SessionId) -> Result<Option<SessionRecord>, RepoError> {
-        let row = sqlx::query("SELECT id, scenario_id, title, status FROM sessions WHERE id = $1")
-            .bind(id)
-            .fetch_optional(&self.pool)
-            .await?;
+        let row = sqlx::query(
+            "SELECT id, scenario_id, title, status, provider_id FROM sessions WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
         row.map(row_to_session).transpose()
     }
 
     async fn list(&self) -> Result<Vec<SessionRecord>, RepoError> {
-        sqlx::query("SELECT id, scenario_id, title, status FROM sessions ORDER BY created_at DESC")
-            .fetch_all(&self.pool)
-            .await?
-            .into_iter()
-            .map(row_to_session)
-            .collect()
+        sqlx::query(
+            "SELECT id, scenario_id, title, status, provider_id FROM sessions ORDER BY created_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(row_to_session)
+        .collect()
     }
 
     async fn delete(&self, id: SessionId) -> Result<(), RepoError> {
@@ -232,6 +243,26 @@ impl SessionRepository for PgPersistence {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    async fn set_provider(
+        &self,
+        session_id: SessionId,
+        provider_id: Option<uuid::Uuid>,
+    ) -> Result<SessionRecord, RepoError> {
+        let row = sqlx::query(
+            "UPDATE sessions
+             SET provider_id = $2, updated_at = now()
+             WHERE id = $1
+             RETURNING id, scenario_id, title, status, provider_id",
+        )
+        .bind(session_id)
+        .bind(provider_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(row_to_session)
+            .transpose()?
+            .ok_or(RepoError::NotFound)
     }
 }
 
@@ -511,6 +542,7 @@ fn row_to_session(row: sqlx::postgres::PgRow) -> Result<SessionRecord, RepoError
         scenario_id: row.try_get("scenario_id")?,
         title: row.try_get("title")?,
         status: row.try_get("status")?,
+        provider_id: row.try_get("provider_id")?,
     })
 }
 

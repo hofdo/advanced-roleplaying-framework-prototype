@@ -24,6 +24,8 @@ impl WorldStateReducer for BasicWorldStateReducer {
                 known_by: fact.known_by,
                 source: FactSource::Turn,
                 reveal_conditions: fact.reveal_conditions,
+                related_secret_ids: fact.related_secret_ids.clone(),
+                reveal_condition_satisfied: fact.reveal_condition_satisfied.clone(),
             });
         }
 
@@ -36,9 +38,29 @@ impl WorldStateReducer for BasicWorldStateReducer {
                         npc.attitude_to_player = Some(attitude);
                     }
                 }
-                NpcChange::KnowledgeAdded { npc_id, fact, .. } => {
+                NpcChange::KnowledgeAdded {
+                    npc_id,
+                    fact,
+                    visibility,
+                    ..
+                } => {
+                    let fact_id = format!(
+                        "fact-{}-{}",
+                        state.version + 1,
+                        state.facts.len() + 1
+                    );
+                    state.facts.push(Fact {
+                        id: fact_id.clone(),
+                        text: fact,
+                        visibility,
+                        known_by: vec![npc_id.clone()],
+                        source: FactSource::Turn,
+                        reveal_conditions: vec![],
+                        related_secret_ids: vec![],
+                        reveal_condition_satisfied: None,
+                    });
                     if let Some(npc) = state.npcs.iter_mut().find(|npc| npc.npc_id == npc_id) {
-                        npc.notes.push(fact);
+                        npc.known_facts.push(fact_id);
                     }
                 }
                 NpcChange::StatusChanged { npc_id, status, .. } => {
@@ -244,5 +266,62 @@ mod tests {
         assert_eq!(next.factions[0].standing, -5);
         assert_eq!(next.clocks[0].current, 2);
         assert_eq!(next.recent_events, vec!["Mana surged in the guildhall."]);
+    }
+
+    #[test]
+    fn knowledge_added_creates_fact_and_registers_on_npc() {
+        let npc_id = "npc-guard".to_string();
+        let state = WorldState {
+            session_id: Uuid::new_v4(),
+            scenario_id: Uuid::new_v4(),
+            version: 1,
+            current_location_id: None,
+            current_scene: None,
+            active_speaker_id: None,
+            facts: vec![],
+            npcs: vec![NpcState {
+                npc_id: npc_id.clone(),
+                status: NpcStatus::Active,
+                visible_to_player: true,
+                location_id: None,
+                attitude_to_player: None,
+                known_facts: vec![],
+                notes: vec![],
+            }],
+            factions: vec![],
+            quests: vec![],
+            clocks: vec![],
+            relationships: vec![],
+            inventory: vec![],
+            summary: None,
+            recent_events: vec![],
+        };
+        let delta = ValidatedWorldStateDelta(WorldStateDelta {
+            npc_changes: vec![NpcChange::KnowledgeAdded {
+                npc_id: npc_id.clone(),
+                fact: "The vault key is hidden under the altar.".to_string(),
+                visibility: FactVisibility::NpcKnown,
+                reason: "Overheard conversation.".to_string(),
+            }],
+            ..WorldStateDelta::default()
+        });
+
+        let next = BasicWorldStateReducer.apply(state, delta);
+
+        // A new Fact must have been created in world_state.facts
+        assert_eq!(next.facts.len(), 1);
+        let fact = &next.facts[0];
+        assert_eq!(fact.text, "The vault key is hidden under the altar.");
+        assert_eq!(fact.visibility, FactVisibility::NpcKnown);
+        assert_eq!(fact.known_by, vec![npc_id.clone()]);
+        assert_eq!(fact.source, FactSource::Turn);
+        assert!(fact.reveal_conditions.is_empty());
+
+        // The NPC's known_facts must contain the new fact's id
+        let npc = next.npcs.iter().find(|n| n.npc_id == npc_id).unwrap();
+        assert_eq!(npc.known_facts, vec![fact.id.clone()]);
+
+        // npc.notes must remain empty (not written to)
+        assert!(npc.notes.is_empty());
     }
 }

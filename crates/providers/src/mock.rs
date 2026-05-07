@@ -1,6 +1,6 @@
 use crate::{
     LlmProvider, LlmRequest, LlmResponse, ProviderCapabilities, ProviderError, ProviderHealth,
-    TokenStream,
+    ProviderReadiness, TokenStream,
 };
 use async_stream::stream;
 use async_trait::async_trait;
@@ -57,6 +57,14 @@ impl LlmProvider for MockProvider {
         })
     }
 
+    async fn readiness(&self) -> Result<ProviderReadiness, ProviderError> {
+        Ok(ProviderReadiness {
+            configured: true,
+            reachable: true,
+            message: "mock".into(),
+        })
+    }
+
     fn capabilities(&self) -> ProviderCapabilities {
         self.capabilities.clone()
     }
@@ -94,6 +102,17 @@ mod tests {
             max_tokens: None,
             json_mode: false,
         }
+    }
+
+    #[tokio::test]
+    async fn readiness_returns_reachable_true_for_mock() {
+        let provider = MockProvider::new("mock", std::iter::empty::<String>());
+
+        let readiness = provider.readiness().await.expect("readiness");
+
+        assert!(readiness.configured);
+        assert!(readiness.reachable);
+        assert_eq!(readiness.message, "mock");
     }
 
     #[tokio::test]

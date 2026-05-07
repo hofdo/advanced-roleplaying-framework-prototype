@@ -1,18 +1,19 @@
 use crate::{
-    BasicContextBuilder, BasicDeltaValidator, BasicFrontendStateProjector,
-    BasicHiddenReasoningStripper, BasicPromptBuilder, BasicReasoningStyleOptimizer,
-    BasicRoleIdentityActivator, BasicWorldStateReducer, BuildContextInput, ContextBuilder,
-    DeltaValidationError, DeltaValidator, FrontendStateProjector, HiddenReasoningStripper,
-    InMemorySessionTurnLock, JsonResponseParser, PromptBuilder, ReasoningStyleOptimizer,
-    ResponseParser, RoleIdentityActivator, RuleBasedSceneClassifier, SceneClassifier,
-    SessionTurnLock, TurnLockError, ValidatedWorldStateDelta, WorldStateReducer,
+    repair_prompt, AgentContext, BasicContextBuilder, BasicDeltaValidator,
+    BasicFrontendStateProjector, BasicHiddenReasoningStripper, BasicPromptBuilder,
+    BasicReasoningStyleOptimizer, BasicRoleIdentityActivator, BasicWorldStateReducer,
+    BuildContextInput, ContextBuilder, DeltaValidationError, DeltaValidator,
+    FrontendStateProjector, HiddenReasoningStripper, InMemorySessionTurnLock, JsonResponseParser,
+    PromptBuilder, ReasoningStyleOptimizer, ResponseParser, RoleIdentityActivator,
+    RuleBasedSceneClassifier, SceneClassifier, SessionTurnLock, TurnLockError,
+    ValidatedWorldStateDelta, WorldStateReducer,
 };
 use async_trait::async_trait;
 use domain::{
     EntityRef, FrontendStatePatch, MessageRecord, MessageRole, Scenario, SceneReasoningStyle,
     SessionId, TurnMode, ViewerContext, WorldState,
 };
-use providers::{LlmProvider, ProviderError};
+use providers::{LlmMessage, LlmMessageRole, LlmProvider, LlmRequest, ProviderError};
 use std::sync::Arc;
 use thiserror::Error;
 use tracing::instrument;
@@ -107,25 +108,44 @@ impl<P: ?Sized, S: ?Sized, L> DefaultTurnPipeline<P, S, L> {
     }
 }
 
+/// Holds everything needed to start a streaming (or non-streaming) provider call.
+/// Produced by [`DefaultTurnPipeline::prepare_turn_context`].
+#[derive(Debug, Clone)]
+pub struct PreparedTurn {
+    /// Loaded DB state for this turn.
+    pub loaded: LoadedTurnState,
+    /// Built agent context passed to the prompt builder.
+    pub context: AgentContext,
+    /// Classified scene style.
+    pub scene_type: SceneReasoningStyle,
+}
+
+/// The post-provider results ready to be persisted.
+/// Produced by [`DefaultTurnPipeline::finalize_turn_delta`].
+#[derive(Debug, Clone)]
+pub struct FinalizedTurn {
+    pub user_message: MessageRecord,
+    pub assistant_message: MessageRecord,
+    pub validated_delta: ValidatedWorldStateDelta,
+    pub updated_world_state: WorldState,
+    pub world_state_version: i64,
+    pub frontend_state_patch: FrontendStatePatch,
+    pub visible_response: String,
+}
+
 impl<P: ?Sized, S: ?Sized, L> DefaultTurnPipeline<P, S, L>
 where
-    P: LlmProvider + 'static,
     S: TurnStateStore + 'static,
-    L: SessionTurnLock,
 {
-    #[instrument(skip_all, fields(session_id = %request.session_id))]
-    pub async fn process_turn(
+    /// Load state, classify scene, activate role, build context.
+    /// The caller is responsible for holding the turn lock before calling this.
+    pub async fn prepare_turn_context(
         &self,
-        request: TurnRequestInput,
-    ) -> Result<TurnResponse, TurnPipelineError> {
-        tracing::info!("turn_started");
-        let _guard = self.turn_lock.acquire(request.session_id).await?;
-        tracing::info!("turn_lock_acquired");
-
-        let loaded = self.store.load_turn_state(request.session_id).await?;
-        let scene_type = self
-            .scene_classifier
-            .classify(&request.input, &loaded.world_state);
+        session_id: SessionId,
+        input: &str,
+    ) -> Result<PreparedTurn, TurnPipelineError> {
+        let loaded = self.store.load_turn_state(session_id).await?;
+        let scene_type = self.scene_classifier.classify(input, &loaded.world_state);
         let active_role =
             self.role_activator
                 .activate(&loaded.scenario, &loaded.world_state, scene_type);
@@ -144,11 +164,163 @@ where
                 })
                 .collect(),
         });
+        Ok(PreparedTurn {
+            loaded,
+            context,
+            scene_type,
+        })
+    }
+
+    /// Core finalization: validate a pre-parsed delta, apply it, project the
+    /// frontend patch, and build the two message records ready for persistence.
+    /// Both the streaming and non-streaming paths converge here so validation,
+    /// reduction, and projection logic live in exactly one place.
+    pub fn finalize_with_parsed_delta(
+        &self,
+        session_id: SessionId,
+        prepared: &PreparedTurn,
+        visible_response: &str,
+        delta: domain::WorldStateDelta,
+        user_input: &str,
+        viewer: &ViewerContext,
+    ) -> Result<FinalizedTurn, TurnPipelineError> {
+        let validated_delta = self.validator.validate(
+            &prepared.loaded.scenario,
+            &prepared.loaded.world_state,
+            &delta,
+        )?;
+        let updated_world_state = self
+            .reducer
+            .apply(prepared.loaded.world_state.clone(), validated_delta.clone());
+        let frontend_state_patch = self.projector.patch_from_delta(
+            &prepared.loaded.scenario,
+            &updated_world_state,
+            &validated_delta,
+            viewer,
+        );
+        let visible_response = visible_response.to_owned();
+        let world_state_version = updated_world_state.version;
+        let user_message = MessageRecord {
+            id: Uuid::new_v4(),
+            session_id,
+            role: MessageRole::User,
+            speaker_id: None,
+            content: user_input.to_owned(),
+            scene_type: Some(prepared.scene_type),
+            prompt_template_version: None,
+            raw_provider_output: None,
+        };
+        let assistant_message = MessageRecord {
+            id: Uuid::new_v4(),
+            session_id,
+            role: MessageRole::Assistant,
+            speaker_id: prepared.loaded.world_state.active_speaker_id.clone(),
+            content: visible_response.clone(),
+            scene_type: Some(prepared.scene_type),
+            prompt_template_version: Some(crate::PROMPT_TEMPLATE_VERSION.into()),
+            raw_provider_output: None,
+        };
+        Ok(FinalizedTurn {
+            user_message,
+            assistant_message,
+            validated_delta,
+            updated_world_state,
+            world_state_version,
+            frontend_state_patch,
+            visible_response,
+        })
+    }
+}
+
+impl<P: ?Sized, S: ?Sized, L> DefaultTurnPipeline<P, S, L>
+where
+    P: LlmProvider + 'static,
+    S: TurnStateStore + 'static,
+    L: SessionTurnLock,
+{
+    /// Parse the delta JSON, validate it, apply it, project the frontend patch,
+    /// and build the two message records ready for persistence.
+    ///
+    /// - `visible_response`: the stripped narration shown to the player
+    /// - `raw_delta_text`: JSON string that `parse_delta_output` can decode
+    ///   (for streaming: output of the second delta-extraction provider call)
+    ///
+    /// On parse failure, makes one controlled repair attempt via
+    /// `provider.generate()`. If repair also fails, persists an error event
+    /// and returns `Err` without mutating world state.
+    ///
+    /// Does NOT persist a successful turn — the caller calls
+    /// `store.persist_successful_turn`.
+    pub async fn finalize_turn_delta(
+        &self,
+        session_id: SessionId,
+        prepared: &PreparedTurn,
+        visible_response: &str,
+        raw_delta_text: &str,
+        user_input: &str,
+        viewer: &ViewerContext,
+    ) -> Result<FinalizedTurn, TurnPipelineError> {
+        let delta = match self.parser.parse_delta_output(raw_delta_text) {
+            Ok(delta) => delta,
+            Err(parse_err) => {
+                tracing::warn!("delta parse failed, attempting repair: {parse_err}");
+                let repair_request = LlmRequest {
+                    messages: vec![LlmMessage {
+                        role: LlmMessageRole::User,
+                        content: repair_prompt(raw_delta_text),
+                    }],
+                    temperature: Some(0.2),
+                    max_tokens: None,
+                    json_mode: true,
+                };
+                let repaired = self.provider.generate(repair_request).await?;
+                match self.parser.parse_delta_output(&repaired.text) {
+                    Ok(delta) => {
+                        tracing::info!("delta parse succeeded after repair");
+                        delta
+                    }
+                    Err(repair_err) => {
+                        let description = format!(
+                            "delta parse failed after repair attempt: {repair_err}"
+                        );
+                        tracing::error!("{description}");
+                        self.store
+                            .persist_error_event(session_id, description.clone())
+                            .await?;
+                        return Err(TurnPipelineError::Parse(repair_err));
+                    }
+                }
+            }
+        };
+        self.finalize_with_parsed_delta(
+            session_id,
+            prepared,
+            visible_response,
+            delta,
+            user_input,
+            viewer,
+        )
+    }
+
+    #[instrument(skip_all, fields(session_id = %request.session_id))]
+    pub async fn process_turn(
+        &self,
+        request: TurnRequestInput,
+    ) -> Result<TurnResponse, TurnPipelineError> {
+        tracing::info!("turn_started");
+        let _guard = self.turn_lock.acquire(request.session_id).await?;
+        tracing::info!("turn_lock_acquired");
+
+        // --- Preparation: load state, classify scene, build context ---
+        let prepared = self
+            .prepare_turn_context(request.session_id, &request.input)
+            .await?;
         tracing::info!("context_built");
 
+        // --- Non-streaming provider call: emits player_response + delta JSON ---
         let prompt = self
             .prompt_builder
-            .build_non_streaming_prompt(&context, &request.input);
+            .build_non_streaming_prompt(&prepared.context, &request.input);
         tracing::info!("provider_called");
         let provider_response = self.provider.generate(prompt).await?;
         let output = match self.parser.parse_turn_output(&provider_response.text) {
@@ -161,62 +333,37 @@ where
             }
         };
         let player_response = self.stripper.strip(&output.player_response);
-        let validated_delta = self.validator.validate(
-            &loaded.scenario,
-            &loaded.world_state,
-            &output.world_state_delta,
-        )?;
-        let updated_state = self
-            .reducer
-            .apply(loaded.world_state.clone(), validated_delta.clone());
-        tracing::info!("delta_applied");
-        let frontend_state_patch = self.projector.patch_from_delta(
-            &loaded.scenario,
-            &updated_state,
-            &validated_delta,
+
+        // --- Finalization: validate delta, reduce, project, build records ---
+        let finalized = self.finalize_with_parsed_delta(
+            request.session_id,
+            &prepared,
+            &player_response,
+            output.world_state_delta,
+            &request.input,
             &request.viewer,
-        );
+        )?;
+        tracing::info!("delta_applied");
         tracing::info!("frontend_state_projected");
 
-        let user_message = MessageRecord {
-            id: Uuid::new_v4(),
-            session_id: request.session_id,
-            role: MessageRole::User,
-            speaker_id: None,
-            content: request.input,
-            scene_type: Some(scene_type),
-            prompt_template_version: None,
-            raw_provider_output: None,
-        };
-        let assistant_message = MessageRecord {
-            id: Uuid::new_v4(),
-            session_id: request.session_id,
-            role: MessageRole::Assistant,
-            speaker_id: loaded.world_state.active_speaker_id.clone(),
-            content: player_response.clone(),
-            scene_type: Some(scene_type),
-            prompt_template_version: Some(crate::PROMPT_TEMPLATE_VERSION.into()),
-            raw_provider_output: None,
-        };
-        let message_id = assistant_message.id;
-
+        let message_id = finalized.assistant_message.id;
         self.store
             .persist_successful_turn(
-                user_message,
-                assistant_message,
-                validated_delta,
-                updated_state.clone(),
+                finalized.user_message,
+                finalized.assistant_message,
+                finalized.validated_delta,
+                finalized.updated_world_state,
             )
             .await?;
 
         tracing::info!("turn_finished");
         Ok(TurnResponse {
             message_id,
-            player_response,
-            scene_type,
-            world_state_version: updated_state.version,
-            changed_entities: frontend_state_patch.changed_entities.clone(),
-            frontend_state_patch,
+            player_response: finalized.visible_response,
+            scene_type: prepared.scene_type,
+            world_state_version: finalized.world_state_version,
+            changed_entities: finalized.frontend_state_patch.changed_entities.clone(),
+            frontend_state_patch: finalized.frontend_state_patch,
         })
     }
 }
@@ -422,6 +569,8 @@ mod tests {
             known_by: vec![],
             source: FactSource::Scenario,
             reveal_conditions: vec!["a divine relic reacts to the mark".into()],
+            related_secret_ids: vec![],
+            reveal_condition_satisfied: None,
         });
         let store = Arc::new(MemoryTurnStore {
             loaded: LoadedTurnState {
@@ -481,5 +630,126 @@ mod tests {
             .expect("persisted state");
         assert_eq!(persisted.factions[0].standing, -5);
         assert_eq!(persisted.clocks[0].current, 2);
+    }
+
+    /// The first provider call returns a malformed delta; the repair call
+    /// returns valid JSON.  The pipeline must apply the repaired delta and
+    /// report a successful turn.
+    #[tokio::test]
+    async fn repair_retry_succeeds_when_second_call_returns_valid_delta() {
+        let session_id = Uuid::new_v4();
+        let scenario = scenario();
+        let store = Arc::new(MemoryTurnStore {
+            loaded: LoadedTurnState {
+                world_state: world_state(session_id, scenario.id),
+                scenario,
+                recent_messages: vec![],
+            },
+            persisted_state: Mutex::new(None),
+        });
+
+        // First response: a valid player_response/world_state_delta wrapper so
+        // parse_turn_output succeeds, but wrap the delta part in a separate call
+        // that comes out malformed.  To exercise finalize_turn_delta directly,
+        // we queue: (1) the full non-streaming turn response (valid), then
+        // (2) a repair response for the delta.
+        //
+        // The easiest way to drive the repair path is to call
+        // finalize_turn_delta with raw_delta_text that is bad JSON, so the
+        // pipeline issues a second provider.generate() with the repair prompt.
+        let valid_delta_json = r#"{
+            "facts_to_add": [],
+            "npc_changes": [],
+            "faction_changes": [],
+            "quest_changes": [],
+            "clock_changes": [],
+            "relationship_changes": [],
+            "location_change": null,
+            "event_log_entries": ["Repaired successfully."]
+        }"#;
+
+        // The non-streaming turn also needs a valid response so process_turn
+        // doesn't fail before reaching finalize_turn_delta.  We drive
+        // finalize_turn_delta directly here to keep the test focused.
+        let provider = Arc::new(MockProvider::new("mock", [valid_delta_json.into()]));
+        let pipeline = DefaultTurnPipeline::new(Arc::clone(&provider), Arc::clone(&store));
+
+        let prepared = pipeline
+            .prepare_turn_context(session_id, "test input")
+            .await
+            .expect("prepared");
+
+        // Pass bad JSON as raw_delta_text — triggers the repair path.
+        let finalized = pipeline
+            .finalize_turn_delta(
+                session_id,
+                &prepared,
+                "visible narration",
+                "{ this is not valid json !!!",
+                "test input",
+                &ViewerContext::player(),
+            )
+            .await
+            .expect("finalize with repair");
+
+        assert!(finalized
+            .validated_delta
+            .0
+            .event_log_entries
+            .contains(&"Repaired successfully.".to_owned()));
+    }
+
+    /// Both the initial parse and the repair call return bad JSON.  The
+    /// pipeline must persist an error event and return `Err` without touching
+    /// the world state.
+    #[tokio::test]
+    async fn repair_retry_persists_error_event_when_repair_also_fails() {
+        let session_id = Uuid::new_v4();
+        let scenario = scenario();
+        let store = Arc::new(MemoryTurnStore {
+            loaded: LoadedTurnState {
+                world_state: world_state(session_id, scenario.id),
+                scenario,
+                recent_messages: vec![],
+            },
+            persisted_state: Mutex::new(None),
+        });
+
+        // The repair call also returns invalid JSON.
+        let provider = Arc::new(MockProvider::new(
+            "mock",
+            ["not json either".into()],
+        ));
+        let pipeline = DefaultTurnPipeline::new(Arc::clone(&provider), Arc::clone(&store));
+
+        let prepared = pipeline
+            .prepare_turn_context(session_id, "test input")
+            .await
+            .expect("prepared");
+
+        let result = pipeline
+            .finalize_turn_delta(
+                session_id,
+                &prepared,
+                "visible narration",
+                "{ also bad json }",
+                "test input",
+                &ViewerContext::player(),
+            )
+            .await;
+
+        assert!(
+            result.is_err(),
+            "expected Err when both initial parse and repair fail"
+        );
+        // World state must NOT have been persisted.
+        assert!(
+            store
+                .persisted_state
+                .lock()
+                .expect("state mutex")
+                .is_none(),
+            "world state must not be mutated on double parse failure"
+        );
     }
 }

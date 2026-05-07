@@ -4,7 +4,9 @@ use domain::{
     Faction, FactionIdentity, Location, Npc, NpcStatus, Quest, RoleIdentity, Scenario,
     ScenarioType, Secret,
 };
+use engine::SessionTurnLock;
 use http_body_util::BodyExt;
+use persistence::PostgresSessionTurnLock;
 use providers::{LlmProvider, MockProvider};
 use serde::de::DeserializeOwned;
 use sqlx::{postgres::PgPoolOptions, PgPool};
@@ -51,7 +53,9 @@ pub async fn postgres_test_context(
     let mut config = shared::AppConfig::default();
     config.storage.backend = shared::StorageBackend::Postgres;
     let store = Arc::new(PostgresApplicationStore::new(persistence));
-    let state = AppState::from_parts(config, store, provider);
+    let turn_lock: Arc<dyn SessionTurnLock> =
+        Arc::new(PostgresSessionTurnLock::new(pool.clone()));
+    let state = AppState::from_parts(config, store, provider, turn_lock);
 
     Ok(TestContext {
         router: app_router(state),

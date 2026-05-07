@@ -5,12 +5,12 @@ use domain::{
     ScenarioId, SessionId, ViewerContext, WorldState,
 };
 use engine::{
-    FrontendStateProjector, InMemorySessionTurnLock, LoadedTurnState, TurnPipelineError,
-    TurnStateStore, ValidatedWorldStateDelta,
+    FrontendStateProjector, InMemorySessionTurnLock, LoadedTurnState, SessionTurnLock,
+    TurnPipelineError, TurnStateStore, ValidatedWorldStateDelta,
 };
 use persistence::{
-    EventRecord, EventRepository, PgPersistence, RepoError, ScenarioRepository, SessionRecord,
-    SessionRepository, WorldStateRepository,
+    EventRecord, EventRepository, PgPersistence, PostgresSessionTurnLock, RepoError,
+    ScenarioRepository, SessionRecord, SessionRepository, WorldStateRepository,
 };
 use providers::{LlmProvider, OpenAiCompatibleProvider, ProviderCapabilities};
 use shared::{AppConfig, StorageBackend};
@@ -25,7 +25,7 @@ pub struct AppState {
     pub config: AppConfig,
     pub store: Arc<dyn ApplicationStore>,
     pub provider: Arc<dyn LlmProvider>,
-    pub turn_lock: InMemorySessionTurnLock,
+    pub turn_lock: Arc<dyn SessionTurnLock>,
 }
 
 impl AppState {
@@ -49,22 +49,28 @@ impl AppState {
         )
         .map_err(|error| anyhow::anyhow!(error.to_string()))?);
 
-        let store: Arc<dyn ApplicationStore> = match config.storage.backend {
-            StorageBackend::Memory => Arc::new(ApiStore::default()),
-            StorageBackend::Postgres => {
-                let persistence = PgPersistence::connect(&config.database.url).await?;
-                if config.storage.migrate_on_startup {
-                    persistence.migrate().await?;
+        let (store, turn_lock): (Arc<dyn ApplicationStore>, Arc<dyn SessionTurnLock>) =
+            match config.storage.backend {
+                StorageBackend::Memory => (
+                    Arc::new(ApiStore::default()),
+                    Arc::new(InMemorySessionTurnLock::default()),
+                ),
+                StorageBackend::Postgres => {
+                    let persistence = PgPersistence::connect(&config.database.url).await?;
+                    if config.storage.migrate_on_startup {
+                        persistence.migrate().await?;
+                    }
+                    let pg_lock =
+                        Arc::new(PostgresSessionTurnLock::new(persistence.pool().clone()));
+                    (Arc::new(PostgresApplicationStore::new(persistence)), pg_lock)
                 }
-                Arc::new(PostgresApplicationStore::new(persistence))
-            }
-        };
+            };
 
         Ok(Self {
             config,
             store,
             provider,
-            turn_lock: InMemorySessionTurnLock::default(),
+            turn_lock,
         })
     }
 
@@ -92,7 +98,7 @@ impl AppState {
             config,
             store: Arc::new(ApiStore::default()),
             provider,
-            turn_lock: InMemorySessionTurnLock::default(),
+            turn_lock: Arc::new(InMemorySessionTurnLock::default()),
         })
     }
 
@@ -100,12 +106,13 @@ impl AppState {
         config: AppConfig,
         store: Arc<dyn ApplicationStore>,
         provider: Arc<dyn LlmProvider>,
+        turn_lock: Arc<dyn SessionTurnLock>,
     ) -> Self {
         Self {
             config,
             store,
             provider,
-            turn_lock: InMemorySessionTurnLock::default(),
+            turn_lock,
         }
     }
 }
@@ -129,6 +136,11 @@ pub trait ApplicationStore: TurnStateStore + Send + Sync {
     async fn list_sessions(&self) -> Result<Vec<SessionRecord>, TurnPipelineError>;
     async fn get_session(&self, id: SessionId) -> Result<Option<SessionRecord>, TurnPipelineError>;
     async fn delete_session(&self, id: SessionId) -> Result<bool, TurnPipelineError>;
+    async fn set_session_provider(
+        &self,
+        session_id: SessionId,
+        provider_id: Option<uuid::Uuid>,
+    ) -> Result<Option<SessionRecord>, TurnPipelineError>;
     async fn world_state(
         &self,
         session_id: SessionId,
@@ -209,6 +221,7 @@ impl ApiStore {
             scenario_id,
             title,
             status: "active".into(),
+            provider_id: None,
         };
         let world_state = initial_world_state(id, &scenario);
         inner.sessions.insert(id, session.clone());
@@ -242,6 +255,17 @@ impl ApiStore {
         inner.messages.remove(&id);
         inner.events.remove(&id);
         existed
+    }
+
+    pub fn set_session_provider(
+        &self,
+        session_id: SessionId,
+        provider_id: Option<Uuid>,
+    ) -> Option<SessionRecord> {
+        let mut inner = self.inner.lock().expect("api store mutex");
+        let session = inner.sessions.get_mut(&session_id)?;
+        session.provider_id = provider_id;
+        Some(session.clone())
     }
 
     pub fn world_state(&self, session_id: SessionId) -> Option<WorldState> {
@@ -311,6 +335,14 @@ impl ApplicationStore for ApiStore {
 
     async fn delete_session(&self, id: SessionId) -> Result<bool, TurnPipelineError> {
         Ok(ApiStore::delete_session(self, id))
+    }
+
+    async fn set_session_provider(
+        &self,
+        session_id: SessionId,
+        provider_id: Option<uuid::Uuid>,
+    ) -> Result<Option<SessionRecord>, TurnPipelineError> {
+        Ok(ApiStore::set_session_provider(self, session_id, provider_id))
     }
 
     async fn world_state(
@@ -513,6 +545,7 @@ impl ApplicationStore for PostgresApplicationStore {
             scenario_id,
             title,
             status: "active".into(),
+            provider_id: None,
         };
         let world_state = initial_world_state(session.id, &scenario);
 
@@ -570,6 +603,18 @@ impl ApplicationStore for PostgresApplicationStore {
             .await
             .map_err(repo_to_pipeline)?;
         Ok(true)
+    }
+
+    async fn set_session_provider(
+        &self,
+        session_id: SessionId,
+        provider_id: Option<uuid::Uuid>,
+    ) -> Result<Option<SessionRecord>, TurnPipelineError> {
+        match SessionRepository::set_provider(&self.persistence, session_id, provider_id).await {
+            Ok(session) => Ok(Some(session)),
+            Err(RepoError::NotFound) => Ok(None),
+            Err(error) => Err(repo_to_pipeline(error)),
+        }
     }
 
     async fn world_state(
@@ -648,6 +693,8 @@ pub fn initial_world_state(session_id: SessionId, scenario: &Scenario) -> WorldS
                 known_by: vec![],
                 source: FactSource::Scenario,
                 reveal_conditions: secret.reveal_conditions.clone(),
+                related_secret_ids: vec![],
+                reveal_condition_satisfied: None,
             })
             .collect(),
         npcs: scenario
@@ -656,6 +703,7 @@ pub fn initial_world_state(session_id: SessionId, scenario: &Scenario) -> WorldS
             .map(|npc| NpcState {
                 npc_id: npc.id.clone(),
                 status: npc.initial_status,
+                visible_to_player: true,
                 location_id: scenario
                     .locations
                     .first()

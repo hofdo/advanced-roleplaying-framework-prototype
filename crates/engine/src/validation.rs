@@ -61,6 +61,17 @@ impl DeltaValidator for BasicDeltaValidator {
             {
                 return Err(DeltaValidationError::SecretLeak(fact.text.clone()));
             }
+            if fact.visibility == FactVisibility::PlayerKnown
+                && !fact.related_secret_ids.is_empty()
+                && fact
+                    .reveal_condition_satisfied
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .is_none()
+            {
+                return Err(DeltaValidationError::MissingRevealProof);
+            }
         }
 
         for change in &delta.npc_changes {
@@ -280,6 +291,10 @@ pub enum DeltaValidationError {
     StandingOutOfRange { faction_id: EntityKey, value: i32 },
     #[error("invalid NPC status transition: {0}")]
     InvalidStatus(String),
+    #[error(
+        "PlayerKnown fact references secrets but provides no reveal_condition_satisfied proof"
+    )]
+    MissingRevealProof,
 }
 
 #[cfg(test)]
@@ -359,10 +374,13 @@ mod tests {
                 known_by: vec![],
                 source: FactSource::Scenario,
                 reveal_conditions: vec!["divine relic reacts".into()],
+                related_secret_ids: vec![],
+                reveal_condition_satisfied: None,
             }],
             npcs: vec![NpcState {
                 npc_id: "examiner".into(),
                 status: NpcStatus::Active,
+                visible_to_player: true,
                 location_id: Some("guildhall".into()),
                 attitude_to_player: None,
                 known_facts: vec![],
@@ -425,6 +443,8 @@ mod tests {
                 known_by: vec![],
                 reveal_conditions: vec![],
                 reason: "The model revealed it early.".into(),
+                related_secret_ids: vec![],
+                reveal_condition_satisfied: None,
             }],
             ..WorldStateDelta::default()
         };
@@ -434,5 +454,67 @@ mod tests {
             .expect_err("secret leak rejected");
 
         assert!(matches!(err, DeltaValidationError::SecretLeak(_)));
+    }
+
+    #[test]
+    fn player_known_fact_with_secret_ref_requires_reveal_proof() {
+        let delta = WorldStateDelta {
+            facts_to_add: vec![FactToAdd {
+                text: "The hero learned something new.".into(),
+                visibility: FactVisibility::PlayerKnown,
+                known_by: vec![],
+                reveal_conditions: vec![],
+                reason: "Observed during the scene.".into(),
+                related_secret_ids: vec!["secret-vault".into()],
+                reveal_condition_satisfied: None,
+            }],
+            ..WorldStateDelta::default()
+        };
+
+        let err = BasicDeltaValidator
+            .validate(&scenario(), &state(), &delta)
+            .expect_err("missing reveal proof rejected");
+
+        assert!(matches!(err, DeltaValidationError::MissingRevealProof));
+    }
+
+    #[test]
+    fn player_known_fact_with_secret_ref_and_proof_passes() {
+        let delta = WorldStateDelta {
+            facts_to_add: vec![FactToAdd {
+                text: "The hero learned something new.".into(),
+                visibility: FactVisibility::PlayerKnown,
+                known_by: vec![],
+                reveal_conditions: vec![],
+                reason: "Observed during the scene.".into(),
+                related_secret_ids: vec!["secret-vault".into()],
+                reveal_condition_satisfied: Some("revealed via secret-vault".into()),
+            }],
+            ..WorldStateDelta::default()
+        };
+
+        BasicDeltaValidator
+            .validate(&scenario(), &state(), &delta)
+            .expect("valid delta with reveal proof should pass");
+    }
+
+    #[test]
+    fn gm_only_fact_with_secret_ref_no_proof_passes() {
+        let delta = WorldStateDelta {
+            facts_to_add: vec![FactToAdd {
+                text: "The villain controls the guild.".into(),
+                visibility: FactVisibility::GmOnly,
+                known_by: vec![],
+                reveal_conditions: vec![],
+                reason: "GM background knowledge.".into(),
+                related_secret_ids: vec!["secret-vault".into()],
+                reveal_condition_satisfied: None,
+            }],
+            ..WorldStateDelta::default()
+        };
+
+        BasicDeltaValidator
+            .validate(&scenario(), &state(), &delta)
+            .expect("GM-only fact with secret ref and no proof should pass");
     }
 }
