@@ -1,5 +1,5 @@
 use crate::{
-    BasicContextBuilder, BasicDeltaValidator, BasicFrontendStateProjector,
+    AgentContext, BasicContextBuilder, BasicDeltaValidator, BasicFrontendStateProjector,
     BasicHiddenReasoningStripper, BasicPromptBuilder, BasicReasoningStyleOptimizer,
     BasicRoleIdentityActivator, BasicWorldStateReducer, BuildContextInput, ContextBuilder,
     DeltaValidationError, DeltaValidator, FrontendStateProjector, HiddenReasoningStripper,
@@ -107,25 +107,44 @@ impl<P: ?Sized, S: ?Sized, L> DefaultTurnPipeline<P, S, L> {
     }
 }
 
+/// Holds everything needed to start a streaming (or non-streaming) provider call.
+/// Produced by [`DefaultTurnPipeline::prepare_turn_context`].
+#[derive(Debug, Clone)]
+pub struct PreparedTurn {
+    /// Loaded DB state for this turn.
+    pub loaded: LoadedTurnState,
+    /// Built agent context passed to the prompt builder.
+    pub context: AgentContext,
+    /// Classified scene style.
+    pub scene_type: SceneReasoningStyle,
+}
+
+/// The post-provider results ready to be persisted.
+/// Produced by [`DefaultTurnPipeline::finalize_turn_delta`].
+#[derive(Debug, Clone)]
+pub struct FinalizedTurn {
+    pub user_message: MessageRecord,
+    pub assistant_message: MessageRecord,
+    pub validated_delta: ValidatedWorldStateDelta,
+    pub updated_world_state: WorldState,
+    pub world_state_version: i64,
+    pub frontend_state_patch: FrontendStatePatch,
+    pub visible_response: String,
+}
+
 impl<P: ?Sized, S: ?Sized, L> DefaultTurnPipeline<P, S, L>
 where
-    P: LlmProvider + 'static,
     S: TurnStateStore + 'static,
-    L: SessionTurnLock,
 {
-    #[instrument(skip_all, fields(session_id = %request.session_id))]
-    pub async fn process_turn(
+    /// Load state, classify scene, activate role, build context.
+    /// The caller is responsible for holding the turn lock before calling this.
+    pub async fn prepare_turn_context(
         &self,
-        request: TurnRequestInput,
-    ) -> Result<TurnResponse, TurnPipelineError> {
-        tracing::info!("turn_started");
-        let _guard = self.turn_lock.acquire(request.session_id).await?;
-        tracing::info!("turn_lock_acquired");
-
-        let loaded = self.store.load_turn_state(request.session_id).await?;
-        let scene_type = self
-            .scene_classifier
-            .classify(&request.input, &loaded.world_state);
+        session_id: SessionId,
+        input: &str,
+    ) -> Result<PreparedTurn, TurnPipelineError> {
+        let loaded = self.store.load_turn_state(session_id).await?;
+        let scene_type = self.scene_classifier.classify(input, &loaded.world_state);
         let active_role =
             self.role_activator
                 .activate(&loaded.scenario, &loaded.world_state, scene_type);
@@ -144,11 +163,123 @@ where
                 })
                 .collect(),
         });
+        Ok(PreparedTurn {
+            loaded,
+            context,
+            scene_type,
+        })
+    }
+
+    /// Parse the delta JSON, validate it, apply it, project the frontend patch,
+    /// and build the two message records ready for persistence.
+    ///
+    /// - `visible_response`: the stripped narration shown to the player
+    /// - `raw_delta_text`: JSON string that `parse_delta_output` can decode
+    ///   (for streaming: output of the second delta-extraction provider call)
+    ///
+    /// Does NOT persist — the caller calls `store.persist_successful_turn`.
+    pub fn finalize_turn_delta(
+        &self,
+        session_id: SessionId,
+        prepared: &PreparedTurn,
+        visible_response: &str,
+        raw_delta_text: &str,
+        user_input: &str,
+        viewer: &ViewerContext,
+    ) -> Result<FinalizedTurn, TurnPipelineError> {
+        let delta = self
+            .parser
+            .parse_delta_output(raw_delta_text)
+            .map_err(TurnPipelineError::from)?;
+        self.finalize_with_parsed_delta(session_id, prepared, visible_response, delta, user_input, viewer)
+    }
+
+    /// Core finalization: validate a pre-parsed delta, apply it, project the
+    /// frontend patch, and build the two message records ready for persistence.
+    /// Both the streaming and non-streaming paths converge here so validation,
+    /// reduction, and projection logic live in exactly one place.
+    pub fn finalize_with_parsed_delta(
+        &self,
+        session_id: SessionId,
+        prepared: &PreparedTurn,
+        visible_response: &str,
+        delta: domain::WorldStateDelta,
+        user_input: &str,
+        viewer: &ViewerContext,
+    ) -> Result<FinalizedTurn, TurnPipelineError> {
+        let validated_delta = self.validator.validate(
+            &prepared.loaded.scenario,
+            &prepared.loaded.world_state,
+            &delta,
+        )?;
+        let updated_world_state = self
+            .reducer
+            .apply(prepared.loaded.world_state.clone(), validated_delta.clone());
+        let frontend_state_patch = self.projector.patch_from_delta(
+            &prepared.loaded.scenario,
+            &updated_world_state,
+            &validated_delta,
+            viewer,
+        );
+        let visible_response = visible_response.to_owned();
+        let world_state_version = updated_world_state.version;
+        let user_message = MessageRecord {
+            id: Uuid::new_v4(),
+            session_id,
+            role: MessageRole::User,
+            speaker_id: None,
+            content: user_input.to_owned(),
+            scene_type: Some(prepared.scene_type),
+            prompt_template_version: None,
+            raw_provider_output: None,
+        };
+        let assistant_message = MessageRecord {
+            id: Uuid::new_v4(),
+            session_id,
+            role: MessageRole::Assistant,
+            speaker_id: prepared.loaded.world_state.active_speaker_id.clone(),
+            content: visible_response.clone(),
+            scene_type: Some(prepared.scene_type),
+            prompt_template_version: Some(crate::PROMPT_TEMPLATE_VERSION.into()),
+            raw_provider_output: None,
+        };
+        Ok(FinalizedTurn {
+            user_message,
+            assistant_message,
+            validated_delta,
+            updated_world_state,
+            world_state_version,
+            frontend_state_patch,
+            visible_response,
+        })
+    }
+}
+
+impl<P: ?Sized, S: ?Sized, L> DefaultTurnPipeline<P, S, L>
+where
+    P: LlmProvider + 'static,
+    S: TurnStateStore + 'static,
+    L: SessionTurnLock,
+{
+    #[instrument(skip_all, fields(session_id = %request.session_id))]
+    pub async fn process_turn(
+        &self,
+        request: TurnRequestInput,
+    ) -> Result<TurnResponse, TurnPipelineError> {
+        tracing::info!("turn_started");
+        let _guard = self.turn_lock.acquire(request.session_id).await?;
+        tracing::info!("turn_lock_acquired");
+
+        // --- Preparation: load state, classify scene, build context ---
+        let prepared = self
+            .prepare_turn_context(request.session_id, &request.input)
+            .await?;
         tracing::info!("context_built");
 
+        // --- Non-streaming provider call: emits player_response + delta JSON ---
         let prompt = self
             .prompt_builder
-            .build_non_streaming_prompt(&context, &request.input);
+            .build_non_streaming_prompt(&prepared.context, &request.input);
         tracing::info!("provider_called");
         let provider_response = self.provider.generate(prompt).await?;
         let output = match self.parser.parse_turn_output(&provider_response.text) {
@@ -161,62 +292,37 @@ where
             }
         };
         let player_response = self.stripper.strip(&output.player_response);
-        let validated_delta = self.validator.validate(
-            &loaded.scenario,
-            &loaded.world_state,
-            &output.world_state_delta,
-        )?;
-        let updated_state = self
-            .reducer
-            .apply(loaded.world_state.clone(), validated_delta.clone());
-        tracing::info!("delta_applied");
-        let frontend_state_patch = self.projector.patch_from_delta(
-            &loaded.scenario,
-            &updated_state,
-            &validated_delta,
+
+        // --- Finalization: validate delta, reduce, project, build records ---
+        let finalized = self.finalize_with_parsed_delta(
+            request.session_id,
+            &prepared,
+            &player_response,
+            output.world_state_delta,
+            &request.input,
             &request.viewer,
-        );
+        )?;
+        tracing::info!("delta_applied");
         tracing::info!("frontend_state_projected");
 
-        let user_message = MessageRecord {
-            id: Uuid::new_v4(),
-            session_id: request.session_id,
-            role: MessageRole::User,
-            speaker_id: None,
-            content: request.input,
-            scene_type: Some(scene_type),
-            prompt_template_version: None,
-            raw_provider_output: None,
-        };
-        let assistant_message = MessageRecord {
-            id: Uuid::new_v4(),
-            session_id: request.session_id,
-            role: MessageRole::Assistant,
-            speaker_id: loaded.world_state.active_speaker_id.clone(),
-            content: player_response.clone(),
-            scene_type: Some(scene_type),
-            prompt_template_version: Some(crate::PROMPT_TEMPLATE_VERSION.into()),
-            raw_provider_output: None,
-        };
-        let message_id = assistant_message.id;
-
+        let message_id = finalized.assistant_message.id;
         self.store
             .persist_successful_turn(
-                user_message,
-                assistant_message,
-                validated_delta,
-                updated_state.clone(),
+                finalized.user_message,
+                finalized.assistant_message,
+                finalized.validated_delta,
+                finalized.updated_world_state,
             )
             .await?;
 
         tracing::info!("turn_finished");
         Ok(TurnResponse {
             message_id,
-            player_response,
-            scene_type,
-            world_state_version: updated_state.version,
-            changed_entities: frontend_state_patch.changed_entities.clone(),
-            frontend_state_patch,
+            player_response: finalized.visible_response,
+            scene_type: prepared.scene_type,
+            world_state_version: finalized.world_state_version,
+            changed_entities: finalized.frontend_state_patch.changed_entities.clone(),
+            frontend_state_patch: finalized.frontend_state_patch,
         })
     }
 }

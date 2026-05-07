@@ -7,13 +7,8 @@ use axum::{
 };
 use domain::{Scenario, SessionId, TurnMode, ViewerContext};
 use engine::{
-    BasicContextBuilder, BasicDeltaValidator, BasicFrontendStateProjector,
-    BasicHiddenReasoningStripper, BasicPromptBuilder, BasicReasoningStyleOptimizer,
-    BasicRoleIdentityActivator, BasicWorldStateReducer, BuildContextInput, ContextBuilder,
-    DefaultTurnPipeline, DeltaValidator, FrontendStateProjector, HiddenReasoningStripper,
-    PROMPT_TEMPLATE_VERSION, PromptBuilder, ReasoningStyleOptimizer, ResponseParser,
-    RoleIdentityActivator, RuleBasedSceneClassifier, SceneClassifier, SessionTurnLock,
-    TurnRequestInput, WorldStateReducer,
+    BasicFrontendStateProjector, DefaultTurnPipeline, FrontendStateProjector,
+    HiddenReasoningStripper, PromptBuilder, SessionTurnLock, TurnRequestInput,
 };
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -319,11 +314,15 @@ async fn turn_stream(
 
     let events = async_stream::stream! {
         let input = request.input;
-        let provider = resolved_provider;
-        let store = Arc::clone(&state.store);
-        let turn_lock = state.turn_lock.clone();
+        // Build a pipeline so all component logic (prepare / finalize) lives in
+        // the engine crate rather than being duplicated here.
+        let pipeline = DefaultTurnPipeline::with_lock(
+            Arc::clone(&resolved_provider),
+            Arc::clone(&state.store),
+            state.turn_lock.clone(),
+        );
 
-        let _guard = match turn_lock.acquire(session_id).await {
+        let _guard = match pipeline.turn_lock.acquire(session_id).await {
             Ok(guard) => guard,
             Err(error) => {
                 yield Ok(error_event(error.to_string()));
@@ -331,45 +330,18 @@ async fn turn_stream(
             }
         };
 
-        let loaded = match store.load_turn_state(session_id).await {
-            Ok(loaded) => loaded,
+        // --- Preparation (lock, load, classify, context) ---
+        let prepared = match pipeline.prepare_turn_context(session_id, &input).await {
+            Ok(prepared) => prepared,
             Err(error) => {
                 yield Ok(error_event(error.to_string()));
                 return;
             }
         };
 
-        let scene_classifier = RuleBasedSceneClassifier;
-        let role_activator = BasicRoleIdentityActivator;
-        let reasoning_optimizer = BasicReasoningStyleOptimizer;
-        let context_builder = BasicContextBuilder;
-        let prompt_builder = BasicPromptBuilder;
-        let parser = engine::JsonResponseParser;
-        let stripper = BasicHiddenReasoningStripper;
-        let validator = BasicDeltaValidator;
-        let reducer = BasicWorldStateReducer;
-        let projector = BasicFrontendStateProjector;
-
-        let scene_type = scene_classifier.classify(&input, &loaded.world_state);
-        let active_role = role_activator.activate(&loaded.scenario, &loaded.world_state, scene_type);
-        let scene_directive = reasoning_optimizer.directive_for(scene_type);
-        let context = context_builder.build(BuildContextInput {
-            scenario: &loaded.scenario,
-            world_state: &loaded.world_state,
-            active_role,
-            scene_directive,
-            recent_messages: loaded
-                .recent_messages
-                .iter()
-                .map(|message| engine::MessageContext {
-                    role: format!("{:?}", message.role),
-                    content: message.content.clone(),
-                })
-                .collect(),
-        });
-
-        let token_stream = match provider
-            .stream(prompt_builder.build_streaming_prompt(&context, &input))
+        // --- Streaming (unique to this path) ---
+        let token_stream = match resolved_provider
+            .stream(pipeline.prompt_builder.build_streaming_prompt(&prepared.context, &input))
             .await
         {
             Ok(stream) => stream,
@@ -380,7 +352,7 @@ async fn turn_stream(
         };
 
         futures::pin_mut!(token_stream);
-        let mut visible_response = String::new();
+        let mut raw_response = String::new();
         while let Some(token) = token_stream.next().await {
             match token {
                 Ok(token) => {
@@ -392,7 +364,7 @@ async fn turn_stream(
                     {
                         continue;
                     }
-                    visible_response.push_str(&token);
+                    raw_response.push_str(&token);
                     yield Ok(Event::default()
                         .event("token")
                         .json_data(TokenEvent { text: token })
@@ -405,66 +377,54 @@ async fn turn_stream(
             }
         }
 
-        let visible_response = stripper.strip(&visible_response);
-        let delta_response = match provider
-            .generate(prompt_builder.build_delta_extraction_prompt(&context, &input, &visible_response))
+        // Strip hidden reasoning from the accumulated tokens, then call the
+        // provider a second time to extract a typed WorldStateDelta from the
+        // narration (streaming path can't emit JSON inline).
+        let visible_response = pipeline.stripper.strip(&raw_response);
+        let delta_response = match resolved_provider
+            .generate(pipeline.prompt_builder.build_delta_extraction_prompt(
+                &prepared.context,
+                &input,
+                &visible_response,
+            ))
             .await
         {
             Ok(response) => response,
             Err(error) => {
-                let _ = store.persist_error_event(session_id, error.to_string()).await;
+                let _ = pipeline.store.persist_error_event(session_id, error.to_string()).await;
                 yield Ok(error_event(error.to_string()));
                 return;
             }
         };
-        let delta = match parser.parse_delta_output(&delta_response.text) {
-            Ok(delta) => delta,
-            Err(error) => {
-                let _ = store.persist_error_event(session_id, error.to_string()).await;
-                yield Ok(error_event(error.to_string()));
-                return;
-            }
-        };
-        let validated_delta = match validator.validate(&loaded.scenario, &loaded.world_state, &delta) {
-            Ok(delta) => delta,
-            Err(error) => {
-                let _ = store.persist_error_event(session_id, error.to_string()).await;
-                yield Ok(error_event(error.to_string()));
-                return;
-            }
-        };
-        let updated_state = reducer.apply(loaded.world_state.clone(), validated_delta.clone());
-        let frontend_state_patch = projector.patch_from_delta(
-            &loaded.scenario,
-            &updated_state,
-            &validated_delta,
-            &ViewerContext::player(),
-        );
-        let user_message = domain::MessageRecord {
-            id: Uuid::new_v4(),
-            session_id,
-            role: domain::MessageRole::User,
-            speaker_id: None,
-            content: input,
-            scene_type: Some(scene_type),
-            prompt_template_version: None,
-            raw_provider_output: None,
-        };
-        let assistant_message = domain::MessageRecord {
-            id: Uuid::new_v4(),
-            session_id,
-            role: domain::MessageRole::Assistant,
-            speaker_id: loaded.world_state.active_speaker_id,
-            content: visible_response,
-            scene_type: Some(scene_type),
-            prompt_template_version: Some(PROMPT_TEMPLATE_VERSION.into()),
-            raw_provider_output: None,
-        };
-        let message_id = assistant_message.id;
-        let world_state_version = updated_state.version;
 
-        if let Err(error) = store
-            .persist_successful_turn(user_message, assistant_message, validated_delta, updated_state)
+        // --- Finalization (validate, reduce, project, build message records) ---
+        let finalized = match pipeline.finalize_turn_delta(
+            session_id,
+            &prepared,
+            &visible_response,
+            &delta_response.text,
+            &input,
+            &ViewerContext::player(),
+        ) {
+            Ok(finalized) => finalized,
+            Err(error) => {
+                let _ = pipeline.store.persist_error_event(session_id, error.to_string()).await;
+                yield Ok(error_event(error.to_string()));
+                return;
+            }
+        };
+
+        let message_id = finalized.assistant_message.id;
+        let world_state_version = finalized.world_state_version;
+        let frontend_state_patch = finalized.frontend_state_patch.clone();
+
+        if let Err(error) = pipeline.store
+            .persist_successful_turn(
+                finalized.user_message,
+                finalized.assistant_message,
+                finalized.validated_delta,
+                finalized.updated_world_state,
+            )
             .await
         {
             yield Ok(error_event(error.to_string()));
