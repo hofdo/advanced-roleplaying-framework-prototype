@@ -16,6 +16,58 @@ This is a pragmatic implementation guide. It intentionally excludes research-rep
 
 ---
 
+
+## Current Prototype Alignment
+
+The current prototype already implements the intended high-level shape:
+
+```text
+api crate
++ domain crate
++ engine crate
++ providers crate
++ persistence crate
++ shared crate
+```
+
+The following pieces are already present or partially present and should be preserved:
+
+- Axum API scaffold,
+- scenario/session/world-state domain concepts,
+- role identity and faction identity,
+- `NpcStatus`,
+- typed `WorldStateDelta`,
+- frontend state projection,
+- provider abstraction,
+- OpenAI-compatible provider,
+- PostgreSQL persistence baseline,
+- non-streaming turn pipeline,
+- streaming visible response with finalization,
+- hidden reasoning stripping,
+- prompt version metadata.
+
+The current priority is hardening, not adding new roleplay features.
+
+### Known prototype gaps to fix
+
+```text
+P1: session provider selection exists but must persist and be used at turn time.
+P1: normal export must not expose raw authoritative world state.
+P1: PostgreSQL mode needs deployment-safe turn locking, not only in-memory locking.
+P1: streaming and non-streaming turn finalization should share validation/reducer/persistence logic.
+P2: NpcChange::KnowledgeAdded must update known_facts, not notes.
+P2: malformed JSON needs one controlled repair retry.
+P2: provider max_retries must be implemented for transport/timeout/5xx only.
+P2: secret leakage validation must go beyond exact string matching.
+P2: NPC projection should use explicit visible_to_player instead of hiding by status alone.
+P3: provider health should distinguish configured vs reachable.
+P3: license metadata should be aligned.
+```
+
+These gaps are reflected in the phased implementation plan near the end of this file.
+
+---
+
 ## Recommended Rust Stack
 
 Use:
@@ -286,6 +338,7 @@ pub enum NpcStatus {
 pub struct NpcState {
     pub npc_id: EntityKey,
     pub status: NpcStatus,
+    pub visible_to_player: bool,
     pub location_id: Option<EntityKey>,
     pub attitude_to_player: Option<String>,
     pub known_facts: Vec<EntityKey>,
@@ -298,7 +351,7 @@ pub struct NpcState {
 - Reject `Dead -> Active` unless a resurrection/revival event exists.
 - Reject `Dead` NPCs speaking unless the scenario supports ghosts, undeath, recordings, or resurrection.
 - Reject `Unconscious` NPCs making plans or negotiations.
-- Reject player-visible certainty about `Hidden` or `Missing` NPCs unless discovered.
+- Reject player-visible certainty about `Hidden` NPCs unless discovered. `Missing`, `Captured`, or `Dead` may be player-visible when `visible_to_player` is true or the player discovered that status.
 - Require a reason for every status change.
 
 ---
@@ -431,6 +484,8 @@ pub struct FactToAdd {
     pub text: String,
     pub visibility: FactVisibility,
     pub known_by: Vec<EntityKey>,
+    pub related_secret_ids: Vec<EntityKey>,
+    pub reveal_condition_satisfied: Option<String>,
     pub reveal_conditions: Vec<String>,
     pub reason: String,
 }
@@ -1481,70 +1536,64 @@ max_retries = 1
 
 ## Implementation Order for Codex
 
-### Phase 1: Scaffold
+The prototype already has a scaffold. Continue with hardening phases rather than adding advanced features.
 
-1. Create workspace crates.
-2. Add dependencies.
-3. Add config loading.
-4. Add Axum server with `/health`.
-5. Add database connection pool.
+### Phase 1: Correctness and safety
 
-### Phase 2: Domain
+1. Implement real session-scoped provider persistence.
+2. Resolve provider at turn time with this priority:
 
-1. Implement domain structs.
-2. Implement scenario validation.
-3. Implement world-state delta structs.
-4. Implement `NpcStatus` and status transition validation.
-5. Implement scene style enum.
-6. Implement frontend visible state structs.
+```text
+session provider -> configured default provider -> error
+```
 
-### Phase 3: Persistence
+3. Make normal session export use `FrontendStateProjector`.
+4. Move raw authoritative export to an admin/debug-only route.
+5. Ensure raw deltas and raw world state are never returned to normal frontend routes.
+6. Ensure `raw_provider_output` remains `NULL` unless explicit local debug mode is enabled.
 
-1. Add SQL migrations.
-2. Implement repositories.
-3. Add repository tests with test database or testcontainers.
-4. Add optimistic locking on `world_states.version`.
+### Phase 2: Turn locking and concurrency
 
-### Phase 4: Provider
+1. Keep the in-memory lock for local-only mode.
+2. Add PostgreSQL-backed turn locking for database mode.
+3. Use either PostgreSQL advisory locks or `sessions.processing_turn` with stale-lock recovery.
+4. Return `409 Conflict` when another turn is already active for the same session.
+5. Keep optimistic locking on `world_states.version`.
 
-1. Implement `LlmProvider` trait.
-2. Implement OpenAI-compatible provider.
-3. Implement mock provider.
-4. Add provider health and config endpoints.
-5. Add timeout/retry policy.
+### Phase 3: Shared turn finalization
 
-### Phase 5: Engine
+1. Extract shared turn preparation into engine code.
+2. Extract shared delta finalization into engine code.
+3. Make non-streaming and streaming turns use the same validator, reducer, projector, and persistence path.
+4. Keep streaming-specific code limited to SSE token emission.
 
-1. Implement scene classifier.
-2. Implement role identity activator.
-3. Implement reasoning style optimizer.
-4. Implement context builder.
-5. Implement prompt builder.
-6. Implement response parser.
-7. Implement hidden reasoning stripper.
-8. Implement delta validator.
-9. Implement reducer.
-10. Implement frontend state projector.
-11. Implement session turn lock.
-12. Implement turn pipeline.
+### Phase 4: Reducer and projection fixes
 
-### Phase 6: API
+1. Fix `NpcChange::KnowledgeAdded` so it writes to `NpcState.known_facts`.
+2. Add `visible_to_player` to `NpcState` or equivalent projection metadata.
+3. Do not hide `Missing` NPCs automatically; hide only when visibility says to hide.
+4. Add projection tests for `Hidden`, `Missing`, `Captured`, and `Dead` NPC statuses.
 
-1. Implement scenario endpoints.
-2. Implement session endpoints.
-3. Implement projected world-state endpoint.
-4. Implement non-streaming turn endpoint.
-5. Implement streaming turn endpoint.
-6. Implement session-scoped provider endpoint.
+### Phase 5: LLM robustness
 
-### Phase 7: Reliability
+1. Add one JSON repair retry for malformed structured output.
+2. Persist an error event and skip state mutation if repair fails.
+3. Implement provider retry policy using `max_retries` for transport errors, timeouts, HTTP `5xx`, and optionally HTTP `429`.
+4. Do not retry unsafe deltas, parse failures after repair, or validation failures as provider errors.
 
-1. Add prompt snapshot tests.
-2. Add integration tests with mock provider.
-3. Add tracing.
-4. Add JSON repair retry.
-5. Add session-level turn locking and optimistic locking for world-state updates.
-6. Add debug/admin response path for raw deltas only if needed.
+### Phase 6: Secret protection
+
+1. Add `related_secret_ids` and `reveal_condition_satisfied` to `FactToAdd` or equivalent reveal metadata.
+2. Reject player-known facts linked to secrets unless a reveal condition is satisfied.
+3. Add tests for paraphrased secret leaks.
+4. Keep exact-string checks only as a secondary defense.
+
+### Phase 7: API and metadata polish
+
+1. Distinguish provider configuration health from actual provider readiness.
+2. Add readiness check endpoint or health response fields.
+3. Align root license and `Cargo.toml` license metadata.
+4. Add admin/debug gating before exposing raw export, raw deltas, raw provider output, or raw world state.
 
 ---
 

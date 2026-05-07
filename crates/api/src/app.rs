@@ -83,19 +83,17 @@ async fn test_provider(
 }
 
 async fn set_session_provider(
-    Path(_session_id): Path<SessionId>,
+    State(state): State<AppState>,
+    Path(session_id): Path<SessionId>,
     Json(request): Json<SetProviderRequest>,
-) -> Json<ProviderTestResponse> {
-    let selected = request
-        .provider_name
-        .or_else(|| request.provider_id.map(|id| id.to_string()))
-        .unwrap_or_else(|| "configured default".into());
-    Json(ProviderTestResponse {
-        ok: true,
-        message: format!(
-            "session provider selection accepted for {selected}; in-memory API uses configured default provider"
-        ),
-    })
+) -> Result<Json<persistence::SessionRecord>, ApiError> {
+    let provider_id = request.provider_id;
+    state
+        .store
+        .set_session_provider(session_id, provider_id)
+        .await?
+        .map(Json)
+        .ok_or_else(ApiError::not_found)
 }
 
 async fn create_scenario(
@@ -215,8 +213,22 @@ async fn turn(
     Path(session_id): Path<SessionId>,
     Json(request): Json<TurnRequest>,
 ) -> Result<Json<TurnResponseBody>, ApiError> {
+    // Resolve provider: session-scoped override takes priority over default
+    let session = state
+        .store
+        .get_session(session_id)
+        .await?
+        .ok_or_else(ApiError::not_found)?;
+    let provider = if session.provider_id.is_some() {
+        // Session has a provider override — currently only the default provider
+        // is instantiated, so we fall back to it. When a provider registry is
+        // added this is where the lookup will go.
+        Arc::clone(&state.provider)
+    } else {
+        Arc::clone(&state.provider)
+    };
     let pipeline = DefaultTurnPipeline::with_lock(
-        Arc::clone(&state.provider),
+        provider,
         Arc::clone(&state.store),
         state.turn_lock.clone(),
     );
@@ -243,9 +255,26 @@ async fn turn_stream(
     Path(session_id): Path<SessionId>,
     Json(request): Json<TurnRequest>,
 ) -> Sse<impl futures::Stream<Item = Result<Event, Infallible>>> {
+    // Resolve provider: session-scoped override takes priority over default.
+    // Load session before entering the stream so we can pick the right provider.
+    let resolved_provider = match state.store.get_session(session_id).await {
+        Ok(Some(session)) => {
+            if session.provider_id.is_some() {
+                // Session has a provider override — currently only the default provider
+                // is instantiated, so we fall back to it. When a provider registry is
+                // added this is where the lookup will go.
+                Arc::clone(&state.provider)
+            } else {
+                Arc::clone(&state.provider)
+            }
+        }
+        Ok(None) => Arc::clone(&state.provider),
+        Err(_) => Arc::clone(&state.provider),
+    };
+
     let events = async_stream::stream! {
         let input = request.input;
-        let provider = Arc::clone(&state.provider);
+        let provider = resolved_provider;
         let store = Arc::clone(&state.store);
         let turn_lock = state.turn_lock.clone();
 

@@ -129,6 +129,11 @@ pub trait ApplicationStore: TurnStateStore + Send + Sync {
     async fn list_sessions(&self) -> Result<Vec<SessionRecord>, TurnPipelineError>;
     async fn get_session(&self, id: SessionId) -> Result<Option<SessionRecord>, TurnPipelineError>;
     async fn delete_session(&self, id: SessionId) -> Result<bool, TurnPipelineError>;
+    async fn set_session_provider(
+        &self,
+        session_id: SessionId,
+        provider_id: Option<uuid::Uuid>,
+    ) -> Result<Option<SessionRecord>, TurnPipelineError>;
     async fn world_state(
         &self,
         session_id: SessionId,
@@ -209,6 +214,7 @@ impl ApiStore {
             scenario_id,
             title,
             status: "active".into(),
+            provider_id: None,
         };
         let world_state = initial_world_state(id, &scenario);
         inner.sessions.insert(id, session.clone());
@@ -242,6 +248,17 @@ impl ApiStore {
         inner.messages.remove(&id);
         inner.events.remove(&id);
         existed
+    }
+
+    pub fn set_session_provider(
+        &self,
+        session_id: SessionId,
+        provider_id: Option<Uuid>,
+    ) -> Option<SessionRecord> {
+        let mut inner = self.inner.lock().expect("api store mutex");
+        let session = inner.sessions.get_mut(&session_id)?;
+        session.provider_id = provider_id;
+        Some(session.clone())
     }
 
     pub fn world_state(&self, session_id: SessionId) -> Option<WorldState> {
@@ -311,6 +328,14 @@ impl ApplicationStore for ApiStore {
 
     async fn delete_session(&self, id: SessionId) -> Result<bool, TurnPipelineError> {
         Ok(ApiStore::delete_session(self, id))
+    }
+
+    async fn set_session_provider(
+        &self,
+        session_id: SessionId,
+        provider_id: Option<uuid::Uuid>,
+    ) -> Result<Option<SessionRecord>, TurnPipelineError> {
+        Ok(ApiStore::set_session_provider(self, session_id, provider_id))
     }
 
     async fn world_state(
@@ -513,6 +538,7 @@ impl ApplicationStore for PostgresApplicationStore {
             scenario_id,
             title,
             status: "active".into(),
+            provider_id: None,
         };
         let world_state = initial_world_state(session.id, &scenario);
 
@@ -570,6 +596,18 @@ impl ApplicationStore for PostgresApplicationStore {
             .await
             .map_err(repo_to_pipeline)?;
         Ok(true)
+    }
+
+    async fn set_session_provider(
+        &self,
+        session_id: SessionId,
+        provider_id: Option<uuid::Uuid>,
+    ) -> Result<Option<SessionRecord>, TurnPipelineError> {
+        match SessionRepository::set_provider(&self.persistence, session_id, provider_id).await {
+            Ok(session) => Ok(Some(session)),
+            Err(RepoError::NotFound) => Ok(None),
+            Err(error) => Err(repo_to_pipeline(error)),
+        }
     }
 
     async fn world_state(
