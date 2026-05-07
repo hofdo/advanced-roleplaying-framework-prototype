@@ -11,7 +11,7 @@ use crate::{
 use async_trait::async_trait;
 use domain::{
     EntityRef, FrontendStatePatch, MessageRecord, MessageRole, Scenario, SceneReasoningStyle,
-    SessionId, TurnMode, ViewerContext, WorldState,
+    SessionId, TurnMode, ViewerContext, WorldState, WorldStateDelta,
 };
 use providers::{LlmMessage, LlmMessageRole, LlmProvider, LlmRequest, ProviderError};
 use std::sync::Arc;
@@ -35,6 +35,12 @@ pub struct TurnResponse {
     pub world_state_version: i64,
     pub changed_entities: Vec<EntityRef>,
     pub frontend_state_patch: FrontendStatePatch,
+}
+
+#[derive(Debug, Clone)]
+pub struct DebugTurnResponse {
+    pub turn: TurnResponse,
+    pub applied_delta: WorldStateDelta,
 }
 
 #[derive(Debug, Clone)]
@@ -372,6 +378,67 @@ where
             world_state_version: finalized.world_state_version,
             changed_entities: finalized.frontend_state_patch.changed_entities.clone(),
             frontend_state_patch: finalized.frontend_state_patch,
+        })
+    }
+
+    #[instrument(skip_all, fields(session_id = %request.session_id))]
+    pub async fn process_turn_debug(
+        &self,
+        request: TurnRequestInput,
+    ) -> Result<DebugTurnResponse, TurnPipelineError> {
+        tracing::info!("debug_turn_started");
+        let _guard = self.turn_lock.acquire(request.session_id).await?;
+
+        let prepared = self
+            .prepare_turn_context(request.session_id, &request.input, request.mode)
+            .await?;
+
+        let prompt = self
+            .prompt_builder
+            .build_non_streaming_prompt(&prepared.context, &request.input);
+        let provider_response = self.provider.generate(prompt).await?;
+        let output = match self.parser.parse_turn_output(&provider_response.text) {
+            Ok(output) => output,
+            Err(error) => {
+                self.store
+                    .persist_error_event(request.session_id, error.to_string())
+                    .await?;
+                return Err(error.into());
+            }
+        };
+        let player_response = self.stripper.strip(&output.player_response);
+        let raw_delta = output.world_state_delta.clone();
+
+        let finalized = self.finalize_with_parsed_delta(
+            request.session_id,
+            &prepared,
+            &player_response,
+            output.world_state_delta,
+            &request.input,
+            &request.viewer,
+        )?;
+
+        let message_id = finalized.assistant_message.id;
+        self.store
+            .persist_successful_turn(
+                finalized.user_message,
+                finalized.assistant_message,
+                finalized.validated_delta,
+                finalized.updated_world_state,
+            )
+            .await?;
+
+        tracing::info!("debug_turn_finished");
+        Ok(DebugTurnResponse {
+            turn: TurnResponse {
+                message_id,
+                player_response: finalized.visible_response,
+                scene_type: prepared.scene_type,
+                world_state_version: finalized.world_state_version,
+                changed_entities: finalized.frontend_state_patch.changed_entities.clone(),
+                frontend_state_patch: finalized.frontend_state_patch,
+            },
+            applied_delta: raw_delta,
         })
     }
 }

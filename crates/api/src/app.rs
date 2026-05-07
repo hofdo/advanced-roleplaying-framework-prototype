@@ -51,6 +51,10 @@ pub fn app_router(app_state: AppState) -> Router {
             "/admin/sessions/:session_id/export/raw",
             get(export_session_raw),
         )
+        .route(
+            "/admin/sessions/:session_id/turn/debug",
+            post(debug_turn),
+        )
         .with_state(app_state)
 }
 
@@ -342,6 +346,41 @@ async fn turn(
     }))
 }
 
+async fn debug_turn(
+    State(state): State<AppState>,
+    Path(session_id): Path<SessionId>,
+    Json(request): Json<TurnRequest>,
+) -> Result<Json<DebugTurnResponseBody>, ApiError> {
+    let session = state
+        .store
+        .get_session(session_id)
+        .await?
+        .ok_or_else(ApiError::not_found)?;
+    let provider = state.resolve_provider(session.provider_id).await;
+    let pipeline = DefaultTurnPipeline::with_lock(
+        provider,
+        Arc::clone(&state.store),
+        state.turn_lock.clone(),
+    );
+    let response = pipeline
+        .process_turn_debug(TurnRequestInput {
+            session_id,
+            input: request.input,
+            mode: request.mode,
+            viewer: ViewerContext::player(),
+        })
+        .await?;
+    Ok(Json(DebugTurnResponseBody {
+        message_id: response.turn.message_id,
+        player_response: response.turn.player_response,
+        scene_type: response.turn.scene_type,
+        world_state_version: response.turn.world_state_version,
+        changed_entities: response.turn.changed_entities,
+        frontend_state_patch: response.turn.frontend_state_patch,
+        applied_delta: response.applied_delta,
+    }))
+}
+
 async fn turn_stream(
     State(state): State<AppState>,
     Path(session_id): Path<SessionId>,
@@ -570,6 +609,17 @@ struct TurnResponseBody {
     world_state_version: i64,
     changed_entities: Vec<domain::EntityRef>,
     frontend_state_patch: domain::FrontendStatePatch,
+}
+
+#[derive(Debug, Serialize)]
+struct DebugTurnResponseBody {
+    message_id: Uuid,
+    player_response: String,
+    scene_type: domain::SceneReasoningStyle,
+    world_state_version: i64,
+    changed_entities: Vec<domain::EntityRef>,
+    frontend_state_patch: domain::FrontendStatePatch,
+    applied_delta: domain::WorldStateDelta,
 }
 
 #[derive(Debug, Serialize)]
