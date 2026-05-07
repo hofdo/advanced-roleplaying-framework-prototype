@@ -569,6 +569,8 @@ mod tests {
             known_by: vec![],
             source: FactSource::Scenario,
             reveal_conditions: vec!["a divine relic reacts to the mark".into()],
+            related_secret_ids: vec![],
+            reveal_condition_satisfied: None,
         });
         let store = Arc::new(MemoryTurnStore {
             loaded: LoadedTurnState {

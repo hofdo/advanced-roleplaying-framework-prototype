@@ -28,6 +28,10 @@ pub struct Fact {
     pub known_by: Vec<EntityKey>,
     pub source: FactSource,
     pub reveal_conditions: Vec<String>,
+    #[serde(default)]
+    pub related_secret_ids: Vec<EntityKey>,
+    #[serde(default)]
+    pub reveal_condition_satisfied: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -153,6 +157,10 @@ pub struct FactToAdd {
     pub known_by: Vec<EntityKey>,
     pub reveal_conditions: Vec<String>,
     pub reason: String,
+    #[serde(default)]
+    pub related_secret_ids: Vec<EntityKey>,
+    #[serde(default)]
+    pub reveal_condition_satisfied: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

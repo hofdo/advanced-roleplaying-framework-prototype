@@ -24,6 +24,8 @@ impl WorldStateReducer for BasicWorldStateReducer {
                 known_by: fact.known_by,
                 source: FactSource::Turn,
                 reveal_conditions: fact.reveal_conditions,
+                related_secret_ids: fact.related_secret_ids.clone(),
+                reveal_condition_satisfied: fact.reveal_condition_satisfied.clone(),
             });
         }
 
@@ -54,6 +56,8 @@ impl WorldStateReducer for BasicWorldStateReducer {
                         known_by: vec![npc_id.clone()],
                         source: FactSource::Turn,
                         reveal_conditions: vec![],
+                        related_secret_ids: vec![],
+                        reveal_condition_satisfied: None,
                     });
                     if let Some(npc) = state.npcs.iter_mut().find(|npc| npc.npc_id == npc_id) {
                         npc.known_facts.push(fact_id);

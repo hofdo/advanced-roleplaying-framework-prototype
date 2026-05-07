@@ -430,6 +430,8 @@ fn export_projection_strips_gm_only_facts() {
                 known_by: vec![],
                 source: FactSource::Scenario,
                 reveal_conditions: vec![],
+                related_secret_ids: vec![],
+                reveal_condition_satisfied: None,
             },
             Fact {
                 id: "gm-only-fact".into(),
@@ -438,6 +440,8 @@ fn export_projection_strips_gm_only_facts() {
                 known_by: vec![],
                 source: FactSource::Scenario,
                 reveal_conditions: vec![],
+                related_secret_ids: vec![],
+                reveal_condition_satisfied: None,
             },
         ],
         npcs: vec![],

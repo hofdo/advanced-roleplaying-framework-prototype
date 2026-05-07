@@ -134,6 +134,8 @@ fn world_state_authoritative_facts_can_distinguish_secret_visibility() {
                 known_by: vec![],
                 source: FactSource::Scenario,
                 reveal_conditions: vec![],
+                related_secret_ids: vec![],
+                reveal_condition_satisfied: None,
             },
             Fact {
                 id: "void-mark-source".into(),
@@ -142,6 +144,8 @@ fn world_state_authoritative_facts_can_distinguish_secret_visibility() {
                 known_by: vec![],
                 source: FactSource::Scenario,
                 reveal_conditions: vec!["a divine relic reacts".into()],
+                related_secret_ids: vec![],
+                reveal_condition_satisfied: None,
             },
         ],
         npcs: vec![],

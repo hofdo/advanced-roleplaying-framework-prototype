@@ -227,6 +227,8 @@ mod tests {
                     known_by: vec![],
                     source: FactSource::Scenario,
                     reveal_conditions: vec![],
+                    related_secret_ids: vec![],
+                    reveal_condition_satisfied: None,
                 },
                 Fact {
                     id: "secret".into(),
@@ -235,6 +237,8 @@ mod tests {
                     known_by: vec![],
                     source: FactSource::Scenario,
                     reveal_conditions: vec![],
+                    related_secret_ids: vec![],
+                    reveal_condition_satisfied: None,
                 },
             ],
             npcs: vec![],

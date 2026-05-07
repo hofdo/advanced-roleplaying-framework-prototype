@@ -693,6 +693,8 @@ pub fn initial_world_state(session_id: SessionId, scenario: &Scenario) -> WorldS
                 known_by: vec![],
                 source: FactSource::Scenario,
                 reveal_conditions: secret.reveal_conditions.clone(),
+                related_secret_ids: vec![],
+                reveal_condition_satisfied: None,
             })
             .collect(),
         npcs: scenario
