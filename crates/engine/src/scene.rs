@@ -1,0 +1,89 @@
+use domain::{SceneReasoningStyle, WorldState};
+
+pub trait SceneClassifier: Send + Sync {
+    fn classify(&self, input: &str, world_state: &WorldState) -> SceneReasoningStyle;
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RuleBasedSceneClassifier;
+
+impl SceneClassifier for RuleBasedSceneClassifier {
+    fn classify(&self, input: &str, world_state: &WorldState) -> SceneReasoningStyle {
+        let lower = input.to_lowercase();
+
+        if world_state.current_scene.as_deref() == Some("combat") {
+            return SceneReasoningStyle::TacticalCombat;
+        }
+
+        if contains_any(&lower, &["attack", "cast", "strike", "dodge", "shoot"]) {
+            return SceneReasoningStyle::TacticalCombat;
+        }
+
+        if contains_any(
+            &lower,
+            &["negotiate", "convince", "threaten", "deal", "bargain"],
+        ) {
+            return SceneReasoningStyle::PoliticalNegotiation;
+        }
+
+        if contains_any(
+            &lower,
+            &["inspect", "search", "investigate", "clue", "examine"],
+        ) {
+            return SceneReasoningStyle::MysteryInvestigation;
+        }
+
+        if contains_any(&lower, &["class", "stats", "rule", "ability", "level"]) {
+            return SceneReasoningStyle::RulesAdjudication;
+        }
+
+        SceneReasoningStyle::CharacterDialogue
+    }
+}
+
+fn contains_any(input: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| input.contains(needle))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use domain::WorldState;
+    use uuid::Uuid;
+
+    fn state(scene: Option<&str>) -> WorldState {
+        WorldState {
+            session_id: Uuid::new_v4(),
+            scenario_id: Uuid::new_v4(),
+            version: 0,
+            current_location_id: None,
+            current_scene: scene.map(str::to_owned),
+            active_speaker_id: None,
+            facts: vec![],
+            npcs: vec![],
+            factions: vec![],
+            quests: vec![],
+            clocks: vec![],
+            relationships: vec![],
+            inventory: vec![],
+            summary: None,
+            recent_events: vec![],
+        }
+    }
+
+    #[test]
+    fn combat_scene_overrides_input() {
+        assert_eq!(
+            RuleBasedSceneClassifier.classify("I ask what happened.", &state(Some("combat"))),
+            SceneReasoningStyle::TacticalCombat
+        );
+    }
+
+    #[test]
+    fn investigation_keywords_select_mystery_style() {
+        assert_eq!(
+            RuleBasedSceneClassifier.classify("I inspect the relic for a clue.", &state(None)),
+            SceneReasoningStyle::MysteryInvestigation
+        );
+    }
+}
