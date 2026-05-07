@@ -20,6 +20,8 @@ pub fn app_router(app_state: AppState) -> Router {
         .route("/health", get(health))
         .route("/providers", get(list_providers))
         .route("/providers/test", post(test_provider))
+        .route("/providers/health", get(provider_health))
+        .route("/providers/readiness", get(provider_readiness))
         .route(
             "/sessions/:session_id/provider",
             patch(set_session_provider),
@@ -80,6 +82,36 @@ async fn test_provider(
     Ok(Json(ProviderTestResponse {
         ok: health.ok,
         message: health.message.unwrap_or_else(|| "configured".into()),
+    }))
+}
+
+async fn provider_health(
+    State(state): State<AppState>,
+) -> Result<Json<ProviderHealthResponse>, ApiError> {
+    let health = state
+        .provider
+        .health()
+        .await
+        .map_err(engine::TurnPipelineError::from)?;
+    Ok(Json(ProviderHealthResponse {
+        name: health.name,
+        ok: health.ok,
+        message: health.message.unwrap_or_else(|| "configured".into()),
+    }))
+}
+
+async fn provider_readiness(
+    State(state): State<AppState>,
+) -> Result<Json<ProviderReadinessResponse>, ApiError> {
+    let readiness = state
+        .provider
+        .readiness()
+        .await
+        .map_err(engine::TurnPipelineError::from)?;
+    Ok(Json(ProviderReadinessResponse {
+        configured: readiness.configured,
+        reachable: readiness.reachable,
+        message: readiness.message,
     }))
 }
 
@@ -482,6 +514,20 @@ struct ProviderResponse {
 #[derive(Debug, Serialize)]
 struct ProviderTestResponse {
     ok: bool,
+    message: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ProviderHealthResponse {
+    name: String,
+    ok: bool,
+    message: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ProviderReadinessResponse {
+    configured: bool,
+    reachable: bool,
     message: String,
 }
 

@@ -1,6 +1,6 @@
 use crate::{
     is_retryable, LlmProvider, LlmRequest, LlmResponse, ProviderCapabilities, ProviderError,
-    ProviderHealth, TokenStream,
+    ProviderHealth, ProviderReadiness, TokenStream,
 };
 use async_stream::try_stream;
 use async_trait::async_trait;
@@ -132,11 +132,45 @@ impl OpenAiCompatibleProvider {
 #[async_trait]
 impl LlmProvider for OpenAiCompatibleProvider {
     async fn health(&self) -> Result<ProviderHealth, ProviderError> {
+        let ok = !self.base_url.is_empty() && !self.name.is_empty();
+        let message = if ok {
+            "provider configured".into()
+        } else {
+            "provider not configured: base_url or name is empty".into()
+        };
         Ok(ProviderHealth {
             name: self.name.clone(),
-            ok: true,
-            message: Some("configured".into()),
+            ok,
+            message: Some(message),
         })
+    }
+
+    async fn readiness(&self) -> Result<ProviderReadiness, ProviderError> {
+        let configured = !self.base_url.is_empty() && !self.name.is_empty();
+        if !configured {
+            return Ok(ProviderReadiness {
+                configured: false,
+                reachable: false,
+                message: "Provider not configured".into(),
+            });
+        }
+        match self.client.get(&self.base_url).send().await {
+            Ok(_) => Ok(ProviderReadiness {
+                configured: true,
+                reachable: true,
+                message: "Provider reachable".into(),
+            }),
+            Err(e) if e.is_connect() || e.is_timeout() => Ok(ProviderReadiness {
+                configured: true,
+                reachable: false,
+                message: format!("Provider not reachable: {e}"),
+            }),
+            Err(_) => Ok(ProviderReadiness {
+                configured: true,
+                reachable: true,
+                message: "Provider reachable (returned error response)".into(),
+            }),
+        }
     }
 
     fn capabilities(&self) -> ProviderCapabilities {
@@ -246,6 +280,39 @@ struct OpenAiResponseFormat {
 mod tests {
     use super::*;
     use crate::{LlmMessage, LlmMessageRole};
+
+    #[tokio::test]
+    async fn health_returns_ok_true_when_base_url_set() {
+        let provider = OpenAiCompatibleProvider::new(
+            "local",
+            "http://localhost:8081/v1/",
+            None,
+            "local-model",
+            ProviderCapabilities::default(),
+        )
+        .expect("provider");
+
+        let health = provider.health().await.expect("health");
+
+        assert!(health.ok);
+        assert_eq!(health.name, "local");
+    }
+
+    #[tokio::test]
+    async fn health_returns_ok_false_when_base_url_empty() {
+        let provider = OpenAiCompatibleProvider::new(
+            "local",
+            "",
+            None,
+            "local-model",
+            ProviderCapabilities::default(),
+        )
+        .expect("provider");
+
+        let health = provider.health().await.expect("health");
+
+        assert!(!health.ok);
+    }
 
     #[test]
     fn request_body_uses_json_mode_only_when_supported() {

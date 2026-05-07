@@ -2,7 +2,7 @@ mod common;
 
 use axum::{body::Body, http::Request};
 use http_body_util::BodyExt;
-use providers::{LlmProvider, LlmRequest, LlmResponse, ProviderCapabilities, ProviderError, ProviderHealth, TokenStream};
+use providers::{LlmProvider, LlmRequest, LlmResponse, ProviderCapabilities, ProviderError, ProviderHealth, ProviderReadiness, TokenStream};
 use serde_json::{json, Value};
 use sqlx::Row;
 use std::sync::{
@@ -363,6 +363,14 @@ impl LlmProvider for BlockingProvider {
             name: "blocking".into(),
             ok: true,
             message: None,
+        })
+    }
+
+    async fn readiness(&self) -> Result<ProviderReadiness, ProviderError> {
+        Ok(ProviderReadiness {
+            configured: true,
+            reachable: true,
+            message: "blocking mock".into(),
         })
     }
 

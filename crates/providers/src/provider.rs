@@ -9,6 +9,7 @@ pub type TokenStream = Pin<Box<dyn Stream<Item = Result<String, ProviderError>> 
 #[async_trait]
 pub trait LlmProvider: Send + Sync {
     async fn health(&self) -> Result<ProviderHealth, ProviderError>;
+    async fn readiness(&self) -> Result<ProviderReadiness, ProviderError>;
     fn capabilities(&self) -> ProviderCapabilities;
     async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, ProviderError>;
     async fn stream(&self, request: LlmRequest) -> Result<TokenStream, ProviderError>;
@@ -19,6 +20,13 @@ pub struct ProviderHealth {
     pub name: String,
     pub ok: bool,
     pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderReadiness {
+    pub configured: bool,
+    pub reachable: bool,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
