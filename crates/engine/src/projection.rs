@@ -1,8 +1,7 @@
 use crate::ValidatedWorldStateDelta;
 use domain::{
-    EntityRef, FactVisibility, FrontendStatePatch, FrontendVisibleState, NpcStatus, QuestStatus,
-    Scenario, ViewerContext, VisibleClock, VisibleFact, VisibleLocation, VisibleNpc, VisibleQuest,
-    WorldState,
+    EntityRef, FactVisibility, FrontendStatePatch, FrontendVisibleState, QuestStatus, Scenario,
+    ViewerContext, VisibleClock, VisibleFact, VisibleLocation, VisibleNpc, VisibleQuest, WorldState,
 };
 
 pub trait FrontendStateProjector: Send + Sync {
@@ -47,13 +46,7 @@ impl FrontendStateProjector for BasicFrontendStateProjector {
         let visible_npcs = state
             .npcs
             .iter()
-            .filter(|npc| {
-                viewer.is_admin
-                    || !matches!(
-                        npc.status,
-                        NpcStatus::Hidden | NpcStatus::Missing | NpcStatus::Unknown
-                    )
-            })
+            .filter(|npc| viewer.is_admin || npc.visible_to_player)
             .filter_map(|npc_state| {
                 scenario
                     .npcs
@@ -256,5 +249,111 @@ mod tests {
 
         assert_eq!(projected.player_known_facts.len(), 1);
         assert_eq!(projected.player_known_facts[0].id, "known");
+    }
+
+    fn make_scenario_with_npc(npc_id: &str) -> Scenario {
+        Scenario {
+            id: Uuid::new_v4(),
+            title: "Test".into(),
+            scenario_type: ScenarioType::Adventure,
+            setting: "test".into(),
+            tone: "neutral".into(),
+            rules: vec![],
+            locations: vec![],
+            factions: vec![],
+            npcs: vec![Npc {
+                id: npc_id.into(),
+                name: "Test NPC".into(),
+                description: "A test NPC.".into(),
+                role_identity: RoleIdentity {
+                    core_emotion: "neutral".into(),
+                    motivation: "exist".into(),
+                    worldview: "ordinary".into(),
+                    fear: None,
+                    desire: None,
+                    speech_style: "plain".into(),
+                    boundaries: vec![],
+                    values: vec![],
+                },
+                stats: None,
+                initial_status: NpcStatus::Active,
+            }],
+            quests: vec![],
+            secrets: vec![],
+            clocks: vec![],
+        }
+    }
+
+    fn make_world_state(scenario: &Scenario, npc_state: NpcState) -> WorldState {
+        WorldState {
+            session_id: Uuid::new_v4(),
+            scenario_id: scenario.id,
+            version: 1,
+            current_location_id: None,
+            current_scene: None,
+            active_speaker_id: None,
+            facts: vec![],
+            npcs: vec![npc_state],
+            factions: vec![],
+            quests: vec![],
+            clocks: vec![],
+            relationships: vec![],
+            inventory: vec![],
+            summary: None,
+            recent_events: vec![],
+        }
+    }
+
+    #[test]
+    fn npc_with_visible_to_player_false_hidden_from_projection() {
+        let scenario = make_scenario_with_npc("villain");
+        let state = make_world_state(
+            &scenario,
+            NpcState {
+                npc_id: "villain".into(),
+                status: NpcStatus::Active,
+                visible_to_player: false,
+                location_id: None,
+                attitude_to_player: None,
+                known_facts: vec![],
+                notes: vec![],
+            },
+        );
+
+        let projected =
+            BasicFrontendStateProjector.project(&scenario, &state, &ViewerContext::player());
+
+        assert!(
+            projected.visible_npcs.is_empty(),
+            "NPC with visible_to_player=false must not appear in visible_npcs"
+        );
+    }
+
+    #[test]
+    fn npc_missing_but_visible_to_player_shows_in_projection() {
+        let scenario = make_scenario_with_npc("ally");
+        let state = make_world_state(
+            &scenario,
+            NpcState {
+                npc_id: "ally".into(),
+                status: NpcStatus::Missing,
+                visible_to_player: true,
+                location_id: None,
+                attitude_to_player: None,
+                known_facts: vec![],
+                notes: vec![],
+            },
+        );
+
+        let projected =
+            BasicFrontendStateProjector.project(&scenario, &state, &ViewerContext::player());
+
+        assert_eq!(
+            projected.visible_npcs.len(),
+            1,
+            "NPC with visible_to_player=true must appear in visible_npcs even when Missing"
+        );
+        assert_eq!(projected.visible_npcs[0].id, "ally");
+        assert_eq!(projected.visible_npcs[0].status, NpcStatus::Missing);
     }
 }

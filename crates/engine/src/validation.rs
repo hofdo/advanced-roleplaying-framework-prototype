@@ -380,6 +380,7 @@ mod tests {
             npcs: vec![NpcState {
                 npc_id: "examiner".into(),
                 status: NpcStatus::Active,
+                visible_to_player: true,
                 location_id: Some("guildhall".into()),
                 attitude_to_player: None,
                 known_facts: vec![],

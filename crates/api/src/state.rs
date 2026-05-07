@@ -703,6 +703,7 @@ pub fn initial_world_state(session_id: SessionId, scenario: &Scenario) -> WorldS
             .map(|npc| NpcState {
                 npc_id: npc.id.clone(),
                 status: npc.initial_status,
+                visible_to_player: true,
                 location_id: scenario
                     .locations
                     .first()

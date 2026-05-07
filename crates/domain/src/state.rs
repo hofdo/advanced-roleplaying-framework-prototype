@@ -56,10 +56,16 @@ pub enum FactSource {
 pub struct NpcState {
     pub npc_id: EntityKey,
     pub status: crate::NpcStatus,
+    #[serde(default = "default_visible_to_player")]
+    pub visible_to_player: bool,
     pub location_id: Option<EntityKey>,
     pub attitude_to_player: Option<String>,
     pub known_facts: Vec<EntityKey>,
     pub notes: Vec<String>,
+}
+
+fn default_visible_to_player() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

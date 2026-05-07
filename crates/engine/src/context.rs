@@ -391,6 +391,7 @@ mod tests {
             npcs: vec![NpcState {
                 npc_id: "seraphyne".into(),
                 status,
+                visible_to_player: true,
                 location_id: Some("hall".into()),
                 attitude_to_player: Some("cautious warmth".into()),
                 known_facts: vec![],

@@ -282,6 +282,7 @@ mod tests {
             npcs: vec![NpcState {
                 npc_id: npc_id.clone(),
                 status: NpcStatus::Active,
+                visible_to_player: true,
                 location_id: None,
                 attitude_to_player: None,
                 known_facts: vec![],
