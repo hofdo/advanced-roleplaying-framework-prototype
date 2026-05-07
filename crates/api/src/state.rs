@@ -9,8 +9,9 @@ use engine::{
     TurnPipelineError, TurnStateStore, ValidatedWorldStateDelta,
 };
 use persistence::{
-    EventRecord, EventRepository, PgPersistence, PostgresSessionTurnLock, RepoError,
-    ScenarioRepository, SessionRecord, SessionRepository, WorldStateRepository,
+    EventRecord, EventRepository, PgPersistence, PostgresSessionTurnLock, ProviderConfigRepository,
+    ProviderRecord, RepoError, ScenarioRepository, SessionRecord, SessionRepository,
+    WorldStateRepository,
 };
 use providers::{LlmProvider, OpenAiCompatibleProvider, ProviderCapabilities};
 use shared::{AppConfig, StorageBackend};
@@ -146,6 +147,12 @@ pub trait ApplicationStore: TurnStateStore + Send + Sync {
         session_id: SessionId,
     ) -> Result<Option<WorldState>, TurnPipelineError>;
     async fn events(&self, session_id: SessionId) -> Result<Vec<EventRecord>, TurnPipelineError>;
+    async fn create_provider(
+        &self,
+        record: ProviderRecord,
+    ) -> Result<ProviderRecord, TurnPipelineError>;
+    async fn list_providers(&self) -> Result<Vec<ProviderRecord>, TurnPipelineError>;
+    async fn delete_provider(&self, id: Uuid) -> Result<(), TurnPipelineError>;
 }
 
 #[derive(Debug, Default)]
@@ -160,6 +167,7 @@ struct ApiStoreInner {
     world_states: HashMap<SessionId, WorldState>,
     messages: HashMap<SessionId, Vec<MessageRecord>>,
     events: HashMap<SessionId, Vec<EventRecord>>,
+    providers: Vec<ProviderRecord>,
 }
 
 impl ApiStore {
@@ -354,6 +362,36 @@ impl ApplicationStore for ApiStore {
 
     async fn events(&self, session_id: SessionId) -> Result<Vec<EventRecord>, TurnPipelineError> {
         Ok(ApiStore::events(self, session_id))
+    }
+
+    async fn create_provider(
+        &self,
+        record: ProviderRecord,
+    ) -> Result<ProviderRecord, TurnPipelineError> {
+        self.inner
+            .lock()
+            .expect("api store mutex")
+            .providers
+            .push(record.clone());
+        Ok(record)
+    }
+
+    async fn list_providers(&self) -> Result<Vec<ProviderRecord>, TurnPipelineError> {
+        Ok(self
+            .inner
+            .lock()
+            .expect("api store mutex")
+            .providers
+            .clone())
+    }
+
+    async fn delete_provider(&self, id: Uuid) -> Result<(), TurnPipelineError> {
+        self.inner
+            .lock()
+            .expect("api store mutex")
+            .providers
+            .retain(|p| p.id != id);
+        Ok(())
     }
 }
 
@@ -628,6 +666,27 @@ impl ApplicationStore for PostgresApplicationStore {
 
     async fn events(&self, session_id: SessionId) -> Result<Vec<EventRecord>, TurnPipelineError> {
         EventRepository::list(&self.persistence, session_id)
+            .await
+            .map_err(repo_to_pipeline)
+    }
+
+    async fn create_provider(
+        &self,
+        record: ProviderRecord,
+    ) -> Result<ProviderRecord, TurnPipelineError> {
+        ProviderConfigRepository::create(&self.persistence, record)
+            .await
+            .map_err(repo_to_pipeline)
+    }
+
+    async fn list_providers(&self) -> Result<Vec<ProviderRecord>, TurnPipelineError> {
+        ProviderConfigRepository::list(&self.persistence)
+            .await
+            .map_err(repo_to_pipeline)
+    }
+
+    async fn delete_provider(&self, id: Uuid) -> Result<(), TurnPipelineError> {
+        ProviderConfigRepository::delete(&self.persistence, id)
             .await
             .map_err(repo_to_pipeline)
     }

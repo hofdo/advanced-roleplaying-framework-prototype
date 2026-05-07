@@ -2,8 +2,9 @@ use crate::{ApiError, AppState, project_session_state};
 use axum::{
     Json, Router,
     extract::{Path, State},
+    http::StatusCode,
     response::sse::{Event, Sse},
-    routing::{get, patch, post},
+    routing::{delete, get, patch, post},
 };
 use domain::{Scenario, SessionId, TurnMode, ViewerContext};
 use engine::{
@@ -18,10 +19,11 @@ use uuid::Uuid;
 pub fn app_router(app_state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
-        .route("/providers", get(list_providers))
+        .route("/providers", get(list_providers).post(register_provider))
         .route("/providers/test", post(test_provider))
         .route("/providers/health", get(provider_health))
         .route("/providers/readiness", get(provider_readiness))
+        .route("/providers/:id", delete(delete_provider))
         .route(
             "/sessions/:session_id/provider",
             patch(set_session_provider),
@@ -60,15 +62,36 @@ async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
     })
 }
 
-async fn list_providers(State(state): State<AppState>) -> Json<Vec<ProviderResponse>> {
-    Json(vec![ProviderResponse {
-        name: state.config.provider.default.name,
-        provider_type: state.config.provider.default.provider_type,
-        base_url: state.config.provider.default.base_url,
-        model: state.config.provider.default.model,
-        supports_streaming: state.config.provider.default.supports_streaming,
-        supports_json_mode: state.config.provider.default.supports_json_mode,
-    }])
+async fn list_providers(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<persistence::ProviderRecord>>, ApiError> {
+    Ok(Json(state.store.list_providers().await?))
+}
+
+async fn register_provider(
+    State(state): State<AppState>,
+    Json(request): Json<RegisterProviderRequest>,
+) -> Result<(StatusCode, Json<persistence::ProviderRecord>), ApiError> {
+    let record = persistence::ProviderRecord {
+        id: Uuid::new_v4(),
+        name: request.name,
+        provider_type: request.provider_type,
+        base_url: request.base_url,
+        model: request.model,
+        api_key_secret_ref: request.api_key_secret_ref,
+        capabilities: request.capabilities.unwrap_or(serde_json::Value::Object(Default::default())),
+        is_default: request.is_default,
+    };
+    let created = state.store.create_provider(record).await?;
+    Ok((StatusCode::CREATED, Json(created)))
+}
+
+async fn delete_provider(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<DeleteResponse>, ApiError> {
+    state.store.delete_provider(id).await?;
+    Ok(Json(DeleteResponse { deleted: true }))
 }
 
 async fn test_provider(
@@ -503,16 +526,6 @@ struct HealthResponse {
 }
 
 #[derive(Debug, Serialize)]
-struct ProviderResponse {
-    name: String,
-    provider_type: String,
-    base_url: String,
-    model: String,
-    supports_streaming: bool,
-    supports_json_mode: bool,
-}
-
-#[derive(Debug, Serialize)]
 struct ProviderTestResponse {
     ok: bool,
     message: String,
@@ -530,6 +543,17 @@ struct ProviderReadinessResponse {
     configured: bool,
     reachable: bool,
     message: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RegisterProviderRequest {
+    name: String,
+    provider_type: String,
+    base_url: String,
+    model: String,
+    api_key_secret_ref: Option<String>,
+    capabilities: Option<serde_json::Value>,
+    is_default: bool,
 }
 
 #[derive(Debug, Deserialize)]
