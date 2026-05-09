@@ -1,7 +1,6 @@
 use domain::{
-    ClockChange, EntityKey, FactSource, FactVisibility, FactionChange, InventoryChange,
-    LocationChange, NpcChange, NpcStatus, QuestChange, RelationshipChange, Scenario, WorldState,
-    WorldStateDelta,
+    ClockChange, EntityKey, Fact, FactVisibility, FactionChange, InventoryChange, LocationChange,
+    NpcChange, NpcStatus, QuestChange, RelationshipChange, Scenario, WorldState, WorldStateDelta,
     validate_npc_status_transition,
 };
 use std::collections::HashSet;
@@ -72,21 +71,32 @@ impl DeltaValidator for BasicDeltaValidator {
 
         for fact in &delta.facts_to_add {
             require_reason(&fact.reason)?;
-            if fact.visibility == FactVisibility::PlayerKnown
-                && leaks_gm_only_fact(world_state, &fact.text)
-            {
-                return Err(DeltaValidationError::SecretLeak(fact.text.clone()));
-            }
-            if fact.visibility == FactVisibility::PlayerKnown
-                && !fact.related_secret_ids.is_empty()
-                && fact
-                    .reveal_condition_satisfied
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .is_none()
-            {
-                return Err(DeltaValidationError::MissingRevealProof);
+            if fact.visibility == FactVisibility::PlayerKnown {
+                let leaked = find_leaked_gm_only_facts(world_state, &fact.text);
+                for gm_fact in &leaked {
+                    let explicitly_ref =
+                        fact.related_secret_ids.iter().any(|id| id == &gm_fact.id);
+                    let has_proof = fact
+                        .reveal_condition_satisfied
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .is_some();
+                    let secret_has_reveal_conditions = !gm_fact.reveal_conditions.is_empty();
+                    if !(explicitly_ref && has_proof && secret_has_reveal_conditions) {
+                        return Err(DeltaValidationError::SecretLeak(fact.text.clone()));
+                    }
+                }
+                if !fact.related_secret_ids.is_empty()
+                    && fact
+                        .reveal_condition_satisfied
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .is_none()
+                {
+                    return Err(DeltaValidationError::MissingRevealProof);
+                }
             }
         }
 
@@ -370,13 +380,21 @@ fn require_reason(reason: &str) -> Result<(), DeltaValidationError> {
     }
 }
 
+fn find_leaked_gm_only_facts<'a>(world_state: &'a WorldState, text: &str) -> Vec<&'a Fact> {
+    // PlayerCorrection source does not override GmOnly visibility — secrets are secrets.
+    world_state
+        .facts
+        .iter()
+        .filter(|fact| {
+            fact.visibility == FactVisibility::GmOnly
+                && !fact.text.trim().is_empty()
+                && text.to_lowercase().contains(&fact.text.to_lowercase())
+        })
+        .collect()
+}
+
 fn leaks_gm_only_fact(world_state: &WorldState, text: &str) -> bool {
-    world_state.facts.iter().any(|fact| {
-        fact.visibility == FactVisibility::GmOnly
-            && !fact.text.trim().is_empty()
-            && text.to_lowercase().contains(&fact.text.to_lowercase())
-            && fact.source != FactSource::PlayerCorrection
-    })
+    !find_leaked_gm_only_facts(world_state, text).is_empty()
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -773,6 +791,129 @@ mod tests {
         BasicDeltaValidator
             .validate(&scenario(), &world, &delta)
             .expect("active NPC gaining knowledge must be allowed");
+    }
+
+    #[test]
+    fn player_known_fact_revealing_gm_only_text_with_explicit_id_and_proof_passes() {
+        let delta = WorldStateDelta {
+            facts_to_add: vec![FactToAdd {
+                text: "The soul-mark was not created by the goddess.".into(),
+                visibility: FactVisibility::PlayerKnown,
+                known_by: vec![],
+                reveal_conditions: vec![],
+                reason: "The divine relic reacted in the player's hand.".into(),
+                related_secret_ids: vec!["void-mark".into()],
+                reveal_condition_satisfied: Some("divine relic reacted".into()),
+            }],
+            ..WorldStateDelta::default()
+        };
+
+        BasicDeltaValidator
+            .validate(&scenario(), &state(), &delta)
+            .expect("explicitly referenced secret with proof must pass");
+    }
+
+    #[test]
+    fn player_known_fact_direct_leak_without_id_ref_is_rejected() {
+        let delta = WorldStateDelta {
+            facts_to_add: vec![FactToAdd {
+                text: "The soul-mark was not created by the goddess.".into(),
+                visibility: FactVisibility::PlayerKnown,
+                known_by: vec![],
+                reveal_conditions: vec![],
+                reason: "The model revealed it without authorization.".into(),
+                related_secret_ids: vec![],
+                reveal_condition_satisfied: None,
+            }],
+            ..WorldStateDelta::default()
+        };
+
+        let err = BasicDeltaValidator
+            .validate(&scenario(), &state(), &delta)
+            .expect_err("leak without id ref must be rejected");
+
+        assert!(matches!(err, DeltaValidationError::SecretLeak(_)));
+    }
+
+    #[test]
+    fn player_known_fact_direct_leak_with_id_ref_but_no_proof_is_rejected() {
+        let delta = WorldStateDelta {
+            facts_to_add: vec![FactToAdd {
+                text: "The soul-mark was not created by the goddess.".into(),
+                visibility: FactVisibility::PlayerKnown,
+                known_by: vec![],
+                reveal_conditions: vec![],
+                reason: "The player guessed it.".into(),
+                related_secret_ids: vec!["void-mark".into()],
+                reveal_condition_satisfied: None,
+            }],
+            ..WorldStateDelta::default()
+        };
+
+        let err = BasicDeltaValidator
+            .validate(&scenario(), &state(), &delta)
+            .expect_err("leak with id ref but no proof must be rejected");
+
+        assert!(matches!(err, DeltaValidationError::SecretLeak(_)));
+    }
+
+    #[test]
+    fn player_known_fact_leaking_two_secrets_referencing_only_one_is_rejected() {
+        let mut world = state();
+        world.facts.push(Fact {
+            id: "second-secret".into(),
+            text: "The vault contains forbidden relics.".into(),
+            visibility: FactVisibility::GmOnly,
+            known_by: vec![],
+            source: FactSource::Scenario,
+            reveal_conditions: vec!["player opens the vault".into()],
+            related_secret_ids: vec![],
+            reveal_condition_satisfied: None,
+        });
+
+        let delta = WorldStateDelta {
+            facts_to_add: vec![FactToAdd {
+                text: "The soul-mark was not created by the goddess. The vault contains forbidden relics.".into(),
+                visibility: FactVisibility::PlayerKnown,
+                known_by: vec![],
+                reveal_conditions: vec![],
+                reason: "The player deduced both facts.".into(),
+                related_secret_ids: vec!["void-mark".into()],
+                reveal_condition_satisfied: Some("divine relic reacted".into()),
+            }],
+            ..WorldStateDelta::default()
+        };
+
+        let err = BasicDeltaValidator
+            .validate(&scenario(), &world, &delta)
+            .expect_err("leaking two secrets while only referencing one must be rejected");
+
+        assert!(matches!(err, DeltaValidationError::SecretLeak(_)));
+    }
+
+    #[test]
+    fn player_known_fact_revealing_gm_only_with_no_reveal_conditions_on_secret_is_rejected() {
+        let mut world = state();
+        world.facts[0].reveal_conditions = vec![];
+
+        let delta = WorldStateDelta {
+            facts_to_add: vec![FactToAdd {
+                text: "The soul-mark was not created by the goddess.".into(),
+                visibility: FactVisibility::PlayerKnown,
+                known_by: vec![],
+                reveal_conditions: vec![],
+                reason: "The player claims to know.".into(),
+                related_secret_ids: vec!["void-mark".into()],
+                reveal_condition_satisfied: Some("some supposed trigger".into()),
+            }],
+            ..WorldStateDelta::default()
+        };
+
+        let err = BasicDeltaValidator
+            .validate(&scenario(), &world, &delta)
+            .expect_err("secret with empty reveal_conditions cannot be bypassed");
+
+        assert!(matches!(err, DeltaValidationError::SecretLeak(_)));
     }
 
     #[test]

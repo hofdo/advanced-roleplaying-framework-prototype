@@ -2,6 +2,25 @@
 
 ---
 
+## [Unreleased] — secrecy-hardening
+
+### Features
+- **Narration-safe streaming prompt** — `build_streaming_prompt` now calls `render_narration_context` (GM-only facts omitted). `build_non_streaming_prompt` and `build_delta_extraction_prompt` retain the full oracle context (GM-only facts included) since both paths require delta-quality LLM reasoning. Streaming is the only path where the LLM emits player-visible text without simultaneously being asked for a delta, making it the correct — and only required — hardening target.
+- **Semantic secret reveal bypass** — `BasicDeltaValidator` now uses `find_leaked_gm_only_facts` (plural) instead of a blunt boolean. A `PlayerKnown` fact whose text matches one or more GM-only fact texts is allowed through if and only if all three conditions hold for every matched secret: (a) the secret's ID appears in `related_secret_ids`, (b) `reveal_condition_satisfied` is non-empty, (c) the GM-only fact itself declares at least one `reveal_conditions` entry. This prevents both unauthorized leaks and accidental bypass of secrets that were never intended to be revealable. The `FactSource::PlayerCorrection` carve-out is removed — source does not override `GmOnly` visibility.
+
+### Tests
+- `streaming_prompt_excludes_gm_only_facts` — proves streaming user message contains no GM-only section or text.
+- `non_streaming_prompt_includes_gm_only_facts` — regression: non-streaming prompt retains GM-only oracle context.
+- `delta_extraction_prompt_includes_gm_only_facts` — regression: delta extraction prompt retains GM-only oracle context.
+- `player_known_fact_revealing_gm_only_text_with_explicit_id_and_proof_passes` — all three bypass conditions met → delta accepted.
+- `player_known_fact_direct_leak_without_id_ref_is_rejected` — text match, no ID reference → `SecretLeak`.
+- `player_known_fact_direct_leak_with_id_ref_but_no_proof_is_rejected` — ID referenced but `reveal_condition_satisfied` absent → `SecretLeak`.
+- `player_known_fact_leaking_two_secrets_referencing_only_one_is_rejected` — text leaks two secrets; only one ID referenced → `SecretLeak`.
+- `player_known_fact_revealing_gm_only_with_no_reveal_conditions_on_secret_is_rejected` — secret has empty `reveal_conditions`; cannot be bypassed even with ID + proof → `SecretLeak`.
+- `admin_projection_includes_gm_only_facts` — admin `ViewerContext` sees all facts; player context sees only `PlayerKnown`.
+
+---
+
 ## [Unreleased] — post-mvp/enhancements
 
 ### Features
