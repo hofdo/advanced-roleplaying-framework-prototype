@@ -470,6 +470,17 @@ mod tests {
     struct MemoryTurnStore {
         loaded: LoadedTurnState,
         persisted_state: Mutex<Option<WorldState>>,
+        persisted_messages: Mutex<Vec<MessageRecord>>,
+    }
+
+    impl MemoryTurnStore {
+        fn new(loaded: LoadedTurnState) -> Self {
+            Self {
+                loaded,
+                persisted_state: Mutex::new(None),
+                persisted_messages: Mutex::new(vec![]),
+            }
+        }
     }
 
     #[async_trait]
@@ -483,12 +494,15 @@ mod tests {
 
         async fn persist_successful_turn(
             &self,
-            _user_message: MessageRecord,
-            _assistant_message: MessageRecord,
+            user_message: MessageRecord,
+            assistant_message: MessageRecord,
             _delta: ValidatedWorldStateDelta,
             updated_state: WorldState,
         ) -> Result<(), TurnPipelineError> {
             *self.persisted_state.lock().expect("state mutex") = Some(updated_state);
+            let mut msgs = self.persisted_messages.lock().expect("messages mutex");
+            msgs.push(user_message);
+            msgs.push(assistant_message);
             Ok(())
         }
 
@@ -571,14 +585,11 @@ mod tests {
     async fn non_streaming_turn_applies_valid_delta_and_projects_state() {
         let session_id = Uuid::new_v4();
         let scenario = scenario();
-        let store = Arc::new(MemoryTurnStore {
-            loaded: LoadedTurnState {
-                world_state: world_state(session_id, scenario.id),
-                scenario,
-                recent_messages: vec![],
-            },
-            persisted_state: Mutex::new(None),
-        });
+        let store = Arc::new(MemoryTurnStore::new(LoadedTurnState {
+            world_state: world_state(session_id, scenario.id),
+            scenario,
+            recent_messages: vec![],
+        }));
         let raw = r#"{
             "player_response": "The guildhall falls silent.",
             "world_state_delta": {
@@ -647,14 +658,11 @@ mod tests {
             related_secret_ids: vec![],
             reveal_condition_satisfied: None,
         });
-        let store = Arc::new(MemoryTurnStore {
-            loaded: LoadedTurnState {
-                world_state: initial_state,
-                scenario,
-                recent_messages: vec![],
-            },
-            persisted_state: Mutex::new(None),
-        });
+        let store = Arc::new(MemoryTurnStore::new(LoadedTurnState {
+            world_state: initial_state,
+            scenario,
+            recent_messages: vec![],
+        }));
         let raw = r#"{
             "player_response": "You remain unharmed, but the guildhall erupts into alarm as examiners shield civilians and runners bolt for senior officials.",
             "world_state_delta": {
@@ -714,14 +722,11 @@ mod tests {
     async fn repair_retry_succeeds_when_second_call_returns_valid_delta() {
         let session_id = Uuid::new_v4();
         let scenario = scenario();
-        let store = Arc::new(MemoryTurnStore {
-            loaded: LoadedTurnState {
-                world_state: world_state(session_id, scenario.id),
-                scenario,
-                recent_messages: vec![],
-            },
-            persisted_state: Mutex::new(None),
-        });
+        let store = Arc::new(MemoryTurnStore::new(LoadedTurnState {
+            world_state: world_state(session_id, scenario.id),
+            scenario,
+            recent_messages: vec![],
+        }));
 
         // First response: a valid player_response/world_state_delta wrapper so
         // parse_turn_output succeeds, but wrap the delta part in a separate call
@@ -781,14 +786,11 @@ mod tests {
     async fn repair_retry_persists_error_event_when_repair_also_fails() {
         let session_id = Uuid::new_v4();
         let scenario = scenario();
-        let store = Arc::new(MemoryTurnStore {
-            loaded: LoadedTurnState {
-                world_state: world_state(session_id, scenario.id),
-                scenario,
-                recent_messages: vec![],
-            },
-            persisted_state: Mutex::new(None),
-        });
+        let store = Arc::new(MemoryTurnStore::new(LoadedTurnState {
+            world_state: world_state(session_id, scenario.id),
+            scenario,
+            recent_messages: vec![],
+        }));
 
         // The repair call also returns invalid JSON.
         let provider = Arc::new(MockProvider::new(
@@ -826,5 +828,105 @@ mod tests {
                 .is_none(),
             "world state must not be mutated on double parse failure"
         );
+    }
+
+    #[tokio::test]
+    async fn debug_turn_returns_applied_delta_with_faction_changes() {
+        let session_id = Uuid::new_v4();
+        let scenario = scenario();
+        let store = Arc::new(MemoryTurnStore::new(LoadedTurnState {
+            world_state: world_state(session_id, scenario.id),
+            scenario,
+            recent_messages: vec![],
+        }));
+        let raw = r#"{
+            "player_response": "The examiner nods cautiously.",
+            "world_state_delta": {
+                "facts_to_add": [],
+                "npc_changes": [],
+                "faction_changes": [{"type":"standing_changed","faction_id":"guild","standing_delta":-3,"reason":"Suspicious behavior."}],
+                "quest_changes": [],
+                "clock_changes": [],
+                "relationship_changes": [],
+                "location_change": null,
+                "event_log_entries": []
+            }
+        }"#;
+        let provider = Arc::new(MockProvider::new("mock", [raw.into()]));
+        let pipeline = DefaultTurnPipeline::new(provider, Arc::clone(&store));
+
+        let result = pipeline
+            .process_turn_debug(TurnRequestInput {
+                session_id,
+                input: "I act suspiciously.".into(),
+                mode: Some(TurnMode::Action),
+                viewer: ViewerContext::player(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(result.turn.world_state_version, 1);
+        assert_eq!(result.applied_delta.faction_changes.len(), 1);
+        match &result.applied_delta.faction_changes[0] {
+            FactionChange::StandingChanged { faction_id, .. } => {
+                assert_eq!(faction_id, "guild");
+            }
+            other => panic!("unexpected faction change variant: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn debug_turn_persists_state_same_as_regular_turn() {
+        let session_id = Uuid::new_v4();
+        let scenario = scenario();
+        let store = Arc::new(MemoryTurnStore::new(LoadedTurnState {
+            world_state: world_state(session_id, scenario.id),
+            scenario,
+            recent_messages: vec![],
+        }));
+        let raw = r#"{
+            "player_response": "The examiner nods cautiously.",
+            "world_state_delta": {
+                "facts_to_add": [],
+                "npc_changes": [],
+                "faction_changes": [{"type":"standing_changed","faction_id":"guild","standing_delta":-3,"reason":"Suspicious behavior."}],
+                "quest_changes": [],
+                "clock_changes": [],
+                "relationship_changes": [],
+                "location_change": null,
+                "event_log_entries": []
+            }
+        }"#;
+        let provider = Arc::new(MockProvider::new("mock", [raw.into()]));
+        let pipeline = DefaultTurnPipeline::new(provider, Arc::clone(&store));
+
+        pipeline
+            .process_turn_debug(TurnRequestInput {
+                session_id,
+                input: "I act suspiciously.".into(),
+                mode: Some(TurnMode::Action),
+                viewer: ViewerContext::player(),
+            })
+            .await
+            .unwrap();
+
+        // World state must be persisted with version 1
+        let persisted = store
+            .persisted_state
+            .lock()
+            .expect("state mutex")
+            .clone()
+            .expect("persisted state");
+        assert_eq!(persisted.version, 1);
+
+        // Both user and assistant messages must have been persisted
+        let messages = store
+            .persisted_messages
+            .lock()
+            .expect("messages mutex")
+            .clone();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, MessageRole::User);
+        assert_eq!(messages[1].role, MessageRole::Assistant);
     }
 }
