@@ -887,6 +887,7 @@ pub async fn project_session_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use providers::MockProvider;
 
     #[tokio::test]
     async fn memory_app_state_reports_memory_storage_status() {
@@ -896,5 +897,74 @@ mod tests {
         let state = AppState::new_memory(config).expect("memory app state");
 
         assert_eq!(state.store.storage_status().await, "memory");
+    }
+
+    #[tokio::test]
+    async fn resolve_provider_returns_registry_entry_when_id_matches() {
+        let default_provider: Arc<dyn LlmProvider> =
+            Arc::new(MockProvider::new("default", std::iter::empty::<String>()));
+        let registry_provider: Arc<dyn LlmProvider> =
+            Arc::new(MockProvider::new("registry", std::iter::empty::<String>()));
+        let registry_id = Uuid::new_v4();
+
+        let mut config = AppConfig::default();
+        config.storage.backend = StorageBackend::Memory;
+        let state = AppState::from_parts(
+            config,
+            Arc::new(ApiStore::default()),
+            Arc::clone(&default_provider),
+            Arc::new(InMemorySessionTurnLock::default()),
+        );
+        state
+            .provider_registry
+            .write()
+            .await
+            .insert(registry_id, Arc::clone(&registry_provider));
+
+        let resolved = state.resolve_provider(Some(registry_id)).await;
+        let resolved_name = resolved.health().await.unwrap().name;
+
+        assert_eq!(resolved_name, "registry");
+    }
+
+    #[tokio::test]
+    async fn resolve_provider_falls_back_to_default_when_id_not_in_registry() {
+        let default_provider: Arc<dyn LlmProvider> =
+            Arc::new(MockProvider::new("default", std::iter::empty::<String>()));
+        let unknown_id = Uuid::new_v4();
+
+        let mut config = AppConfig::default();
+        config.storage.backend = StorageBackend::Memory;
+        let state = AppState::from_parts(
+            config,
+            Arc::new(ApiStore::default()),
+            Arc::clone(&default_provider),
+            Arc::new(InMemorySessionTurnLock::default()),
+        );
+
+        let resolved = state.resolve_provider(Some(unknown_id)).await;
+        let resolved_name = resolved.health().await.unwrap().name;
+
+        assert_eq!(resolved_name, "default");
+    }
+
+    #[tokio::test]
+    async fn resolve_provider_returns_default_when_no_provider_id() {
+        let default_provider: Arc<dyn LlmProvider> =
+            Arc::new(MockProvider::new("default", std::iter::empty::<String>()));
+
+        let mut config = AppConfig::default();
+        config.storage.backend = StorageBackend::Memory;
+        let state = AppState::from_parts(
+            config,
+            Arc::new(ApiStore::default()),
+            Arc::clone(&default_provider),
+            Arc::new(InMemorySessionTurnLock::default()),
+        );
+
+        let resolved = state.resolve_provider(None).await;
+        let resolved_name = resolved.health().await.unwrap().name;
+
+        assert_eq!(resolved_name, "default");
     }
 }

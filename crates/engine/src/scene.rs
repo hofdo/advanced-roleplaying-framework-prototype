@@ -86,4 +86,52 @@ mod tests {
             SceneReasoningStyle::MysteryInvestigation
         );
     }
+
+    #[test]
+    fn political_keywords_select_negotiation() {
+        assert_eq!(
+            RuleBasedSceneClassifier.classify("I want to negotiate a deal.", &state(None)),
+            SceneReasoningStyle::PoliticalNegotiation
+        );
+    }
+
+    #[test]
+    fn rules_keywords_select_adjudication() {
+        assert_eq!(
+            RuleBasedSceneClassifier.classify("What does the rule say about ability checks?", &state(None)),
+            SceneReasoningStyle::RulesAdjudication
+        );
+    }
+
+    #[test]
+    fn default_input_selects_character_dialogue() {
+        assert_eq!(
+            RuleBasedSceneClassifier.classify("Hello there", &state(None)),
+            SceneReasoningStyle::CharacterDialogue
+        );
+    }
+
+    #[test]
+    fn combat_keywords_without_scene_override_select_combat() {
+        assert_eq!(
+            RuleBasedSceneClassifier.classify("I strike the enemy hard.", &state(None)),
+            SceneReasoningStyle::TacticalCombat
+        );
+    }
+
+    #[test]
+    fn scene_override_takes_priority_over_input_keywords() {
+        assert_eq!(
+            RuleBasedSceneClassifier.classify("negotiate deal", &state(Some("combat"))),
+            SceneReasoningStyle::TacticalCombat
+        );
+    }
+
+    #[test]
+    fn investigation_keywords_with_combat_scene_still_use_scene() {
+        assert_eq!(
+            RuleBasedSceneClassifier.classify("I investigate the clue", &state(Some("combat"))),
+            SceneReasoningStyle::TacticalCombat
+        );
+    }
 }

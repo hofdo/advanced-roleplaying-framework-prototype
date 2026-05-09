@@ -16,3 +16,6 @@ thiserror.workspace = true
 time.workspace = true
 tokio.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+testcontainers-modules = { version = "0.15", features = ["postgres"] }

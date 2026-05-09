@@ -1,10 +1,10 @@
-use api::{app_router, AppState, PostgresApplicationStore};
+use api::{app_router, AppState, ApiStore, PostgresApplicationStore};
 use axum::{body::Body, http::Request, Router};
 use domain::{
     Faction, FactionIdentity, Location, Npc, NpcStatus, Quest, RoleIdentity, Scenario,
     ScenarioType, Secret,
 };
-use engine::SessionTurnLock;
+use engine::{InMemorySessionTurnLock, SessionTurnLock};
 use http_body_util::BodyExt;
 use persistence::PostgresSessionTurnLock;
 use providers::{LlmProvider, MockProvider};
@@ -114,6 +114,18 @@ pub async fn send_empty(
 
 pub fn json_body<T: DeserializeOwned>(body: &[u8]) -> T {
     serde_json::from_slice(body).expect("json body")
+}
+
+pub fn memory_test_context(provider: Arc<dyn LlmProvider>) -> Router {
+    let mut config = shared::AppConfig::default();
+    config.storage.backend = shared::StorageBackend::Memory;
+    let state = AppState::from_parts(
+        config,
+        Arc::new(ApiStore::default()),
+        provider,
+        Arc::new(InMemorySessionTurnLock::default()),
+    );
+    app_router(state)
 }
 
 pub fn sample_scenario() -> Scenario {
