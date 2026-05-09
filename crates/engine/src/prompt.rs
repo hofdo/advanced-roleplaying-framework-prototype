@@ -2,9 +2,10 @@ use crate::AgentContext;
 use domain::{TurnMode, WorldStateDelta};
 use providers::{LlmMessage, LlmMessageRole, LlmRequest};
 use serde::Deserialize;
+use std::collections::HashSet;
 use thiserror::Error;
 
-pub const PROMPT_TEMPLATE_VERSION: &str = "roleplaying-engine-v1";
+pub const PROMPT_TEMPLATE_VERSION: &str = "roleplaying-engine-v2";
 
 pub trait PromptBuilder: Send + Sync {
     fn build_non_streaming_prompt(&self, context: &AgentContext, player_input: &str) -> LlmRequest;
@@ -31,9 +32,8 @@ impl PromptBuilder for BasicPromptBuilder {
                 LlmMessage {
                     role: LlmMessageRole::User,
                     content: format!(
-                        "{}\n\nPLAYER INPUT:\n{}\n\nOUTPUT CONTRACT:\nReturn strict JSON with keys player_response and world_state_delta. The delta may only use typed change arrays.",
-                        render_context(context),
-                        player_input
+                        "{}\n\nOUTPUT CONTRACT:\nReturn strict JSON with keys player_response and world_state_delta. The delta may only use typed change arrays.",
+                        render_context(context, player_input),
                     ),
                 },
             ],
@@ -55,11 +55,7 @@ impl PromptBuilder for BasicPromptBuilder {
                 },
                 LlmMessage {
                     role: LlmMessageRole::User,
-                    content: format!(
-                        "{}\n\nPLAYER INPUT:\n{}",
-                        render_context(context),
-                        player_input
-                    ),
+                    content: render_context(context, player_input),
                 },
             ],
             temperature: Some(0.8),
@@ -84,9 +80,8 @@ impl PromptBuilder for BasicPromptBuilder {
                 LlmMessage {
                     role: LlmMessageRole::User,
                     content: format!(
-                        "{}\n\nPLAYER INPUT:\n{}\n\nVISIBLE RESPONSE:\n{}\n\nReturn only world_state_delta JSON.",
-                        render_context(context),
-                        player_input,
+                        "{}\n\nVISIBLE RESPONSE:\n{}\n\nOUTPUT CONTRACT:\nReturn only world_state_delta JSON.",
+                        render_context(context, player_input),
                         visible_response
                     ),
                 },
@@ -129,37 +124,298 @@ fn system_rules(mode: Option<TurnMode>) -> String {
     }
 }
 
-fn render_context(context: &AgentContext) -> String {
-    format!(
-        "SCENARIO: {}\nSETTING: {}\nSCENE TYPE: {:?}\nPRIORITIZE: {}\nAVOID: {}\nACTIVE ROLE: {}\nPLAYER-KNOWN FACTS: {}\nRELEVANT GM-ONLY FACTS (labeled, do not reveal unless justified): {}\nRECENT SUMMARY: {}",
-        context.scenario_title,
-        context.setting_summary,
-        context.scene_directive.style,
-        context.scene_directive.priorities.join("; "),
-        context.scene_directive.avoid.join("; "),
-        context
-            .active_role
-            .active_role_name
-            .as_deref()
-            .unwrap_or("Narrator/GM"),
-        context
-            .player_known_facts
+fn render_context(context: &AgentContext, player_input: &str) -> String {
+    [
+        render_section(
+            "SCENARIO AND SETTING",
+            &[
+                format!("Scenario: {}", context.scenario_title),
+                format!("Setting: {}", context.setting_summary),
+                format!("Rules: {}", join_or_none(&context.rules)),
+            ],
+        ),
+        render_section(
+            "SCENE STYLE DIRECTIVE",
+            &[
+                format!("Style: {:?}", context.scene_directive.style),
+                format!(
+                    "Priorities: {}",
+                    join_or_none(&context.scene_directive.priorities)
+                ),
+                format!("Avoid: {}", join_or_none(&context.scene_directive.avoid)),
+                format!(
+                    "Visible response shape: {}",
+                    context.scene_directive.visible_response_shape
+                ),
+            ],
+        ),
+        render_section(
+            "ACTIVE ROLE ACTIVATION",
+            &[
+                format!(
+                    "Active role: {}",
+                    context
+                        .active_role
+                        .active_role_name
+                        .as_deref()
+                        .unwrap_or("Narrator/GM")
+                ),
+                format!(
+                    "Emotion now: {}",
+                    context.active_role.emotion_now.as_deref().unwrap_or("none")
+                ),
+                format!(
+                    "Motivation now: {}",
+                    context
+                        .active_role
+                        .motivation_now
+                        .as_deref()
+                        .unwrap_or("none")
+                ),
+                format!(
+                    "Knowledge boundaries: {}",
+                    join_or_none(&context.active_role.knowledge_boundaries)
+                ),
+                format!(
+                    "Forbidden moves: {}",
+                    join_or_none(&context.active_role.forbidden_moves)
+                ),
+                format!(
+                    "Speech constraints: {}",
+                    join_or_none(&context.active_role.speech_constraints)
+                ),
+            ],
+        ),
+        render_section(
+            "CURRENT WORLD STATE",
+            &[
+                format!(
+                    "Current location: {}",
+                    context
+                        .current_location
+                        .as_ref()
+                        .map(|location| format!("{} — {}", location.name, location.description))
+                        .unwrap_or_else(|| "none".into())
+                ),
+                format!(
+                    "Relevant NPCs: {}",
+                    if context.relevant_npcs.is_empty() {
+                        "none".into()
+                    } else {
+                        context
+                            .relevant_npcs
+                            .iter()
+                            .map(|npc| {
+                                format!(
+                                    "{} ({:?}; attitude: {})",
+                                    npc.npc.name,
+                                    npc.status,
+                                    npc.attitude_to_player.as_deref().unwrap_or("none")
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join(" | ")
+                    }
+                ),
+                format!(
+                    "Relevant factions: {}",
+                    if context.relevant_factions.is_empty() {
+                        "none".into()
+                    } else {
+                        context
+                            .relevant_factions
+                            .iter()
+                            .map(|faction| {
+                                let standing = faction
+                                    .state
+                                    .as_ref()
+                                    .map(|state| state.standing.to_string())
+                                    .unwrap_or_else(|| "none".into());
+                                format!(
+                                    "{} (standing: {}; public goal: {})",
+                                    faction.faction.name,
+                                    standing,
+                                    faction.faction.faction_identity.public_goal
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join(" | ")
+                    }
+                ),
+                format!(
+                    "Active quests: {}",
+                    if context.active_quests.is_empty() {
+                        "none".into()
+                    } else {
+                        context
+                            .active_quests
+                            .iter()
+                            .map(|quest| format!("{} ({:?})", quest.quest_id, quest.status))
+                            .collect::<Vec<_>>()
+                            .join(" | ")
+                    }
+                ),
+                format!(
+                    "Active clocks: {}",
+                    if context.active_clocks.is_empty() {
+                        "none".into()
+                    } else {
+                        context
+                            .active_clocks
+                            .iter()
+                            .map(|clock| {
+                                format!(
+                                    "{} ({}/{}; consequence: {})",
+                                    clock.title, clock.current, clock.max, clock.consequence
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join(" | ")
+                    }
+                ),
+            ],
+        ),
+        render_section(
+            "RELEVANT FACTS",
+            &[
+                format!(
+                    "Player-known facts: {}",
+                    if context.player_known_facts.is_empty() {
+                        "none".into()
+                    } else {
+                        context
+                            .player_known_facts
+                            .iter()
+                            .map(|fact| fact.text.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" | ")
+                    }
+                ),
+                format!(
+                    "GM-only facts (do not reveal unless justified): {}",
+                    render_gm_only_facts(context, player_input)
+                ),
+            ],
+        ),
+        render_single_value_section(
+            "RECENT SUMMARY",
+            context.recent_summary.as_deref().unwrap_or("none"),
+        ),
+        render_section(
+            "RECENT MESSAGES",
+            &[if context.recent_messages.is_empty() {
+                "none".into()
+            } else {
+                context
+                    .recent_messages
+                    .iter()
+                    .map(|message| format!("{}: {}", message.role, message.content))
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            }],
+        ),
+        render_single_value_section("PLAYER INPUT", player_input),
+    ]
+    .join("\n\n")
+}
+
+fn render_gm_only_facts(context: &AgentContext, player_input: &str) -> String {
+    let relevant = relevant_gm_only_facts(context, player_input);
+    if relevant.is_empty() {
+        "none".into()
+    } else {
+        relevant
             .iter()
-            .map(|fact| fact.text.as_str())
+            .map(|fact| {
+                let reveal_conditions = if fact.reveal_conditions.is_empty() {
+                    "none".into()
+                } else {
+                    fact.reveal_conditions.join("; ")
+                };
+                format!("{} (reveal conditions: {reveal_conditions})", fact.text)
+            })
             .collect::<Vec<_>>()
-            .join(" | "),
-        context
-            .gm_only_facts
-            .iter()
-            .map(|fact| format!(
-                "{} (reveal: {})",
-                fact.text,
-                fact.reveal_conditions.join("; ")
-            ))
-            .collect::<Vec<_>>()
-            .join(" | "),
-        context.recent_summary.as_deref().unwrap_or("")
+            .join(" | ")
+    }
+}
+
+fn relevant_gm_only_facts<'a>(
+    context: &'a AgentContext,
+    player_input: &str,
+) -> Vec<&'a domain::Fact> {
+    let location_name = context
+        .current_location
+        .as_ref()
+        .map(|location| location.name.as_str())
+        .unwrap_or("");
+    let active_role_name = context.active_role.active_role_name.as_deref().unwrap_or("");
+    let quest_text = context
+        .active_quests
+        .iter()
+        .map(|quest| quest.quest_id.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let clock_text = context
+        .active_clocks
+        .iter()
+        .map(|clock| clock.title.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let cues = tokenize(&format!(
+        "{player_input} {location_name} {active_role_name} {quest_text} {clock_text}"
+    ));
+
+    context
+        .gm_only_facts
+        .iter()
+        .filter(|fact| {
+            let fact_text = format!("{} {}", fact.text, fact.reveal_conditions.join(" "));
+            let fact_tokens = tokenize(&fact_text);
+            !fact_tokens.is_disjoint(&cues)
+        })
+        .collect()
+}
+
+fn tokenize(input: &str) -> HashSet<String> {
+    input
+        .split(|ch: char| !ch.is_alphanumeric())
+        .map(|token| token.to_ascii_lowercase())
+        .filter(|token| token.len() >= 3 && !is_noise_token(token))
+        .collect()
+}
+
+fn is_noise_token(token: &str) -> bool {
+    matches!(
+        token,
+        "the"
+            | "and"
+            | "for"
+            | "with"
+            | "that"
+            | "this"
+            | "from"
+            | "into"
+            | "stop"
+            | "clock"
+            | "only"
+            | "during"
     )
+}
+
+fn render_section(title: &str, lines: &[String]) -> String {
+    format!("{title}:\n{}", lines.join("\n"))
+}
+
+fn render_single_value_section(title: &str, value: &str) -> String {
+    format!("{title}:\n{value}")
+}
+
+fn join_or_none(values: &[String]) -> String {
+    if values.is_empty() {
+        "none".into()
+    } else {
+        values.join("; ")
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -254,10 +510,7 @@ mod tests {
     // ---- TurnMode prompt shaping tests ----
 
     fn minimal_context(mode: Option<TurnMode>) -> crate::AgentContext {
-        use crate::{
-            FactionContext, MessageContext, NpcContext, ReasoningStyleDirective,
-            RoleActivationContext,
-        };
+        use crate::{ReasoningStyleDirective, RoleActivationContext};
         use domain::SceneReasoningStyle;
         crate::AgentContext {
             scenario_title: "Test".into(),
@@ -340,5 +593,229 @@ mod tests {
         );
         // Both should produce the same system prompt
         assert_eq!(sys_d, sys_n);
+    }
+
+    fn user_message_content(request: &providers::LlmRequest) -> &str {
+        request
+            .messages
+            .iter()
+            .find(|m| m.role == providers::LlmMessageRole::User)
+            .map(|m| m.content.as_str())
+            .unwrap_or("")
+    }
+
+    fn rich_context(mode: Option<TurnMode>) -> crate::AgentContext {
+        use crate::{
+            FactionContext, MessageContext, NpcContext, ReasoningStyleDirective,
+            RoleActivationContext,
+        };
+        use domain::{
+            ClockState, Fact, FactSource, FactVisibility, Faction, FactionIdentity, FactionState,
+            Location, Npc, NpcStatus, QuestState, QuestStatus, RoleIdentity,
+            SceneReasoningStyle,
+        };
+
+        crate::AgentContext {
+            scenario_title: "Aurethia".into(),
+            setting_summary: "High fantasy city under magical strain".into(),
+            current_location: Some(Location {
+                id: "guildhall".into(),
+                name: "Guildhall".into(),
+                description: "A vaulted hall humming with mana.".into(),
+                visible: true,
+            }),
+            active_role: RoleActivationContext {
+                active_role_name: Some("Seraphyne".into()),
+                emotion_now: Some("worried".into()),
+                motivation_now: Some("guide carefully".into()),
+                knowledge_boundaries: vec!["Does not know the void source".into()],
+                forbidden_moves: vec!["Do not reveal GM-only secrets early".into()],
+                speech_constraints: vec!["Solemn and precise".into()],
+            },
+            scene_directive: ReasoningStyleDirective {
+                style: SceneReasoningStyle::PoliticalNegotiation,
+                priorities: vec!["track leverage".into(), "show visible consequence".into()],
+                avoid: vec!["generic exposition".into()],
+                visible_response_shape: "immersive dialogue plus visible social consequence"
+                    .into(),
+            },
+            relevant_npcs: vec![NpcContext {
+                npc: Npc {
+                    id: "seraphyne".into(),
+                    name: "Seraphyne".into(),
+                    description: "A solemn goddess.".into(),
+                    role_identity: RoleIdentity {
+                        core_emotion: "worried".into(),
+                        motivation: "guide carefully".into(),
+                        worldview: "power requires responsibility".into(),
+                        fear: None,
+                        desire: None,
+                        speech_style: "solemn".into(),
+                        boundaries: vec!["Avoids speaking of hidden ruin".into()],
+                        values: vec!["mercy".into()],
+                    },
+                    stats: None,
+                    initial_status: NpcStatus::Active,
+                },
+                status: NpcStatus::Active,
+                attitude_to_player: Some("cautious warmth".into()),
+            }],
+            relevant_factions: vec![FactionContext {
+                faction: Faction {
+                    id: "guild".into(),
+                    name: "Adventurers Guild".into(),
+                    description: "The city's licensed adventurers.".into(),
+                    faction_identity: FactionIdentity {
+                        public_goal: "Keep order".into(),
+                        hidden_goal: Some("Contain the mana anomaly".into()),
+                        values: vec!["discipline".into()],
+                        fears: vec!["public panic".into()],
+                        methods: vec!["quiet pressure".into()],
+                    },
+                    initial_standing: 0,
+                },
+                state: Some(FactionState {
+                    faction_id: "guild".into(),
+                    standing: -2,
+                    public_notes: vec!["Watching the player closely".into()],
+                    hidden_notes: vec!["Preparing a sealed inquiry".into()],
+                    revealed_goals: vec!["Keep order".into()],
+                }),
+            }],
+            active_quests: vec![QuestState {
+                quest_id: "mana-anomaly".into(),
+                status: QuestStatus::Active,
+                completed_objectives: vec!["inspect-rift".into()],
+                visible: true,
+            }],
+            active_clocks: vec![ClockState {
+                id: "guildhall-panic".into(),
+                title: "Guildhall Panic".into(),
+                current: 2,
+                max: 6,
+                consequence: "The guild seals the hall".into(),
+            }],
+            player_known_facts: vec![Fact {
+                id: "known-1".into(),
+                text: "Witnesses saw abnormal mana in the guildhall".into(),
+                visibility: FactVisibility::PlayerKnown,
+                known_by: vec![],
+                source: FactSource::Turn,
+                reveal_conditions: vec![],
+                related_secret_ids: vec![],
+                reveal_condition_satisfied: None,
+            }],
+            gm_only_facts: vec![
+                Fact {
+                    id: "gm-relevant".into(),
+                    text: "The guildhall panic will expose the hidden ruin".into(),
+                    visibility: FactVisibility::GmOnly,
+                    known_by: vec![],
+                    source: FactSource::Turn,
+                    reveal_conditions: vec!["if the panic clock reaches 4".into()],
+                    related_secret_ids: vec!["hidden-ruin".into()],
+                    reveal_condition_satisfied: None,
+                },
+                Fact {
+                    id: "gm-irrelevant".into(),
+                    text: "A duke across the sea hides a sapphire ledger".into(),
+                    visibility: FactVisibility::GmOnly,
+                    known_by: vec![],
+                    source: FactSource::Turn,
+                    reveal_conditions: vec!["only during the harbor arc".into()],
+                    related_secret_ids: vec!["harbor-ledger".into()],
+                    reveal_condition_satisfied: None,
+                },
+            ],
+            recent_summary: Some("The guild suspects the player is tied to the anomaly.".into()),
+            recent_messages: vec![
+                MessageContext {
+                    role: "User".into(),
+                    content: "I steady the crowd and ask Seraphyne for help.".into(),
+                },
+                MessageContext {
+                    role: "Assistant".into(),
+                    content: "Seraphyne lowers her voice as the hall falls silent.".into(),
+                },
+            ],
+            rules: vec![
+                "Do not reveal unrevealed secrets".into(),
+                "Respect faction consequences".into(),
+            ],
+            mode,
+        }
+    }
+
+    #[test]
+    fn non_streaming_prompt_includes_all_context_sections() {
+        let request = BasicPromptBuilder.build_non_streaming_prompt(
+            &rich_context(Some(TurnMode::Action)),
+            "I negotiate with the guild to stop the panic clock.",
+        );
+        let user = user_message_content(&request);
+
+        for section in [
+            "SCENARIO AND SETTING:",
+            "SCENE STYLE DIRECTIVE:",
+            "ACTIVE ROLE ACTIVATION:",
+            "CURRENT WORLD STATE:",
+            "RELEVANT FACTS:",
+            "RECENT SUMMARY:",
+            "RECENT MESSAGES:",
+            "PLAYER INPUT:",
+            "OUTPUT CONTRACT:",
+        ] {
+            assert!(
+                user.contains(section),
+                "expected section {section} in prompt, got: {user}"
+            );
+        }
+        assert!(user.contains("Seraphyne"));
+        assert!(user.contains("Guildhall"));
+        assert!(user.contains("track leverage"));
+        assert!(user.contains("Solemn and precise"));
+    }
+
+    #[test]
+    fn streaming_prompt_uses_same_context_without_json_contract() {
+        let request = BasicPromptBuilder.build_streaming_prompt(
+            &rich_context(Some(TurnMode::Dialogue)),
+            "I ask Seraphyne to address the guild.",
+        );
+        let system = system_message_content(&request);
+        let user = user_message_content(&request);
+
+        assert!(system.contains("Stream only player-visible narration"));
+        assert!(user.contains("RECENT MESSAGES:"));
+        assert!(!user.contains("OUTPUT CONTRACT:"));
+        assert!(!user.contains("world_state_delta"));
+    }
+
+    #[test]
+    fn delta_extraction_prompt_includes_visible_response_and_delta_contract() {
+        let request = BasicPromptBuilder.build_delta_extraction_prompt(
+            &rich_context(Some(TurnMode::Action)),
+            "I calm the room.",
+            "Seraphyne raises one hand and the panic ebbs.",
+        );
+        let user = user_message_content(&request);
+
+        assert!(user.contains("VISIBLE RESPONSE:"));
+        assert!(user.contains("Seraphyne raises one hand"));
+        assert!(user.contains("Return only world_state_delta JSON."));
+        assert!(user.contains("CURRENT WORLD STATE:"));
+    }
+
+    #[test]
+    fn non_streaming_prompt_filters_irrelevant_gm_only_facts() {
+        let request = BasicPromptBuilder.build_non_streaming_prompt(
+            &rich_context(Some(TurnMode::Action)),
+            "I negotiate with the guild to stop the panic clock.",
+        );
+        let user = user_message_content(&request);
+
+        assert!(user.contains("The guildhall panic will expose the hidden ruin"));
+        assert!(user.contains("if the panic clock reaches 4"));
+        assert!(!user.contains("sapphire ledger"));
     }
 }
