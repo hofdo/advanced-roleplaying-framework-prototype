@@ -33,6 +33,7 @@ pub struct AppState {
 
 impl AppState {
     pub async fn new(config: AppConfig) -> anyhow::Result<Self> {
+        config.validate()?;
         let provider_config = &config.provider.default;
         let provider = Arc::new(OpenAiCompatibleProvider::new(
             provider_config.name.clone(),
@@ -58,7 +59,7 @@ impl AppState {
             Arc<RwLock<HashMap<Uuid, Arc<dyn LlmProvider>>>>,
         ) = match config.storage.backend {
             StorageBackend::Memory => (
-                Arc::new(ApiStore::default()),
+                Arc::new(ApiStore::new(config.debug.store_raw_provider_output)),
                 Arc::new(InMemorySessionTurnLock::default()),
                 Arc::new(RwLock::new(HashMap::new())),
             ),
@@ -77,7 +78,10 @@ impl AppState {
                     }
                 }
                 (
-                    Arc::new(PostgresApplicationStore::new(persistence)),
+                    Arc::new(PostgresApplicationStore::new(
+                        persistence,
+                        config.debug.store_raw_provider_output,
+                    )),
                     pg_lock,
                     Arc::new(RwLock::new(registry)),
                 )
@@ -94,6 +98,8 @@ impl AppState {
     }
 
     pub fn new_memory(config: AppConfig) -> anyhow::Result<Self> {
+        config.validate()?;
+        let store_raw_provider_output = config.debug.store_raw_provider_output;
         let provider_config = &config.provider.default;
         let provider = Arc::new(OpenAiCompatibleProvider::new(
             provider_config.name.clone(),
@@ -115,7 +121,7 @@ impl AppState {
 
         Ok(Self {
             config,
-            store: Arc::new(ApiStore::default()),
+            store: Arc::new(ApiStore::new(store_raw_provider_output)),
             provider,
             provider_registry: Arc::new(RwLock::new(HashMap::new())),
             turn_lock: Arc::new(InMemorySessionTurnLock::default()),
@@ -128,6 +134,9 @@ impl AppState {
         provider: Arc<dyn LlmProvider>,
         turn_lock: Arc<dyn SessionTurnLock>,
     ) -> Self {
+        config
+            .validate()
+            .expect("invalid admin configuration for application state");
         Self {
             config,
             store,
@@ -191,6 +200,7 @@ pub trait ApplicationStore: TurnStateStore + Send + Sync {
 #[derive(Debug, Default)]
 pub struct ApiStore {
     inner: Mutex<ApiStoreInner>,
+    store_raw_provider_output: bool,
 }
 
 #[derive(Debug, Default)]
@@ -204,6 +214,13 @@ struct ApiStoreInner {
 }
 
 impl ApiStore {
+    pub fn new(store_raw_provider_output: bool) -> Self {
+        Self {
+            inner: Mutex::new(ApiStoreInner::default()),
+            store_raw_provider_output,
+        }
+    }
+
     pub fn create_scenario(&self, scenario: Scenario) -> Scenario {
         self.inner
             .lock()
@@ -473,10 +490,13 @@ impl TurnStateStore for ApiStore {
     async fn persist_successful_turn(
         &self,
         user_message: MessageRecord,
-        assistant_message: MessageRecord,
+        mut assistant_message: MessageRecord,
         delta: ValidatedWorldStateDelta,
         updated_state: WorldState,
     ) -> Result<(), TurnPipelineError> {
+        if !self.store_raw_provider_output {
+            assistant_message.raw_provider_output = None;
+        }
         let mut inner = self.inner.lock().expect("api store mutex");
         inner
             .messages
@@ -521,16 +541,41 @@ impl TurnStateStore for ApiStore {
             });
         Ok(())
     }
+
+    async fn persist_pipeline_event(
+        &self,
+        session_id: SessionId,
+        event_type: &'static str,
+        description: String,
+    ) -> Result<(), TurnPipelineError> {
+        self.inner
+            .lock()
+            .expect("api store mutex")
+            .events
+            .entry(session_id)
+            .or_default()
+            .push(EventRecord {
+                id: Uuid::new_v4(),
+                session_id,
+                event_type: event_type.into(),
+                description,
+            });
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct PostgresApplicationStore {
     persistence: PgPersistence,
+    store_raw_provider_output: bool,
 }
 
 impl PostgresApplicationStore {
-    pub fn new(persistence: PgPersistence) -> Self {
-        Self { persistence }
+    pub fn new(persistence: PgPersistence, store_raw_provider_output: bool) -> Self {
+        Self {
+            persistence,
+            store_raw_provider_output,
+        }
     }
 }
 
@@ -737,10 +782,13 @@ impl TurnStateStore for PostgresApplicationStore {
     async fn persist_successful_turn(
         &self,
         user_message: MessageRecord,
-        assistant_message: MessageRecord,
+        mut assistant_message: MessageRecord,
         delta: ValidatedWorldStateDelta,
         updated_state: WorldState,
     ) -> Result<(), TurnPipelineError> {
+        if !self.store_raw_provider_output {
+            assistant_message.raw_provider_output = None;
+        }
         self.persistence
             .persist_successful_turn(user_message, assistant_message, delta, updated_state)
             .await
@@ -754,6 +802,17 @@ impl TurnStateStore for PostgresApplicationStore {
         self.persistence
             .persist_error_event(session_id, description)
             .await
+    }
+
+    async fn persist_pipeline_event(
+        &self,
+        session_id: SessionId,
+        event_type: &'static str,
+        description: String,
+    ) -> Result<(), TurnPipelineError> {
+        EventRepository::append(&self.persistence, session_id, event_type, &description)
+            .await
+            .map_err(repo_to_pipeline)
     }
 }
 
@@ -839,6 +898,7 @@ pub fn initial_world_state(session_id: SessionId, scenario: &Scenario) -> WorldS
                 current: clock.current,
                 max: clock.max,
                 consequence: clock.consequence.clone(),
+                visible_to_player: true,
             })
             .collect(),
         relationships: Vec::<RelationshipState>::new(),
@@ -911,7 +971,7 @@ mod tests {
         config.storage.backend = StorageBackend::Memory;
         let state = AppState::from_parts(
             config,
-            Arc::new(ApiStore::default()),
+            Arc::new(ApiStore::new(false)),
             Arc::clone(&default_provider),
             Arc::new(InMemorySessionTurnLock::default()),
         );
@@ -937,7 +997,7 @@ mod tests {
         config.storage.backend = StorageBackend::Memory;
         let state = AppState::from_parts(
             config,
-            Arc::new(ApiStore::default()),
+            Arc::new(ApiStore::new(false)),
             Arc::clone(&default_provider),
             Arc::new(InMemorySessionTurnLock::default()),
         );
@@ -957,7 +1017,7 @@ mod tests {
         config.storage.backend = StorageBackend::Memory;
         let state = AppState::from_parts(
             config,
-            Arc::new(ApiStore::default()),
+            Arc::new(ApiStore::new(false)),
             Arc::clone(&default_provider),
             Arc::new(InMemorySessionTurnLock::default()),
         );
@@ -966,5 +1026,109 @@ mod tests {
         let resolved_name = resolved.health().await.unwrap().name;
 
         assert_eq!(resolved_name, "default");
+    }
+
+    #[tokio::test]
+    async fn memory_store_drops_raw_provider_output_when_disabled() {
+        let store = ApiStore::new(false);
+        let session_id = Uuid::new_v4();
+        let assistant_id = Uuid::new_v4();
+
+        store
+            .persist_successful_turn(
+                MessageRecord {
+                    id: Uuid::new_v4(),
+                    session_id,
+                    role: domain::MessageRole::User,
+                    speaker_id: None,
+                    content: "hello".into(),
+                    scene_type: None,
+                    prompt_template_version: None,
+                    raw_provider_output: None,
+                },
+                MessageRecord {
+                    id: assistant_id,
+                    session_id,
+                    role: domain::MessageRole::Assistant,
+                    speaker_id: None,
+                    content: "response".into(),
+                    scene_type: None,
+                    prompt_template_version: Some("v1".into()),
+                    raw_provider_output: Some(serde_json::json!({"raw": true})),
+                },
+                ValidatedWorldStateDelta(domain::WorldStateDelta::default()),
+                initial_world_state(session_id, &sample_scenario_for_tests()),
+            )
+            .await
+            .expect("persist turn");
+
+        let inner = store.inner.lock().expect("api store mutex");
+        let assistant = inner
+            .messages
+            .get(&session_id)
+            .and_then(|messages| messages.iter().find(|message| message.id == assistant_id))
+            .expect("assistant message");
+        assert_eq!(assistant.raw_provider_output, None);
+    }
+
+    #[tokio::test]
+    async fn memory_store_preserves_raw_provider_output_when_enabled() {
+        let store = ApiStore::new(true);
+        let session_id = Uuid::new_v4();
+        let assistant_id = Uuid::new_v4();
+        let raw = serde_json::json!({"raw": true});
+
+        store
+            .persist_successful_turn(
+                MessageRecord {
+                    id: Uuid::new_v4(),
+                    session_id,
+                    role: domain::MessageRole::User,
+                    speaker_id: None,
+                    content: "hello".into(),
+                    scene_type: None,
+                    prompt_template_version: None,
+                    raw_provider_output: None,
+                },
+                MessageRecord {
+                    id: assistant_id,
+                    session_id,
+                    role: domain::MessageRole::Assistant,
+                    speaker_id: None,
+                    content: "response".into(),
+                    scene_type: None,
+                    prompt_template_version: Some("v1".into()),
+                    raw_provider_output: Some(raw.clone()),
+                },
+                ValidatedWorldStateDelta(domain::WorldStateDelta::default()),
+                initial_world_state(session_id, &sample_scenario_for_tests()),
+            )
+            .await
+            .expect("persist turn");
+
+        let inner = store.inner.lock().expect("api store mutex");
+        let assistant = inner
+            .messages
+            .get(&session_id)
+            .and_then(|messages| messages.iter().find(|message| message.id == assistant_id))
+            .expect("assistant message");
+        assert_eq!(assistant.raw_provider_output, Some(raw));
+    }
+
+    fn sample_scenario_for_tests() -> Scenario {
+        Scenario {
+            id: Uuid::new_v4(),
+            title: "Test".into(),
+            scenario_type: domain::ScenarioType::Adventure,
+            setting: "test".into(),
+            tone: "neutral".into(),
+            rules: vec![],
+            locations: vec![],
+            factions: vec![],
+            npcs: vec![],
+            quests: vec![],
+            secrets: vec![],
+            clocks: vec![],
+        }
     }
 }

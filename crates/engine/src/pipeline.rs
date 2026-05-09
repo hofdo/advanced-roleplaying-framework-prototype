@@ -70,6 +70,13 @@ pub trait TurnStateStore: Send + Sync {
         session_id: SessionId,
         description: String,
     ) -> Result<(), TurnPipelineError>;
+
+    async fn persist_pipeline_event(
+        &self,
+        session_id: SessionId,
+        event_type: &'static str,
+        description: String,
+    ) -> Result<(), TurnPipelineError>;
 }
 
 pub struct DefaultTurnPipeline<P: ?Sized, S: ?Sized, L = InMemorySessionTurnLock> {
@@ -137,6 +144,35 @@ pub struct FinalizedTurn {
     pub world_state_version: i64,
     pub frontend_state_patch: FrontendStatePatch,
     pub visible_response: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PipelineEventKind {
+    TurnStarted,
+    TurnLockAcquired,
+    ContextBuilt,
+    ProviderCalled,
+    ProviderResponded,
+    DeltaApplied,
+    FrontendStateProjected,
+    TurnFinished,
+    TurnLockReleasing,
+}
+
+impl PipelineEventKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::TurnStarted => "turn_started",
+            Self::TurnLockAcquired => "turn_lock_acquired",
+            Self::ContextBuilt => "context_built",
+            Self::ProviderCalled => "provider_called",
+            Self::ProviderResponded => "provider_responded",
+            Self::DeltaApplied => "delta_applied",
+            Self::FrontendStateProjected => "frontend_state_projected",
+            Self::TurnFinished => "turn_finished",
+            Self::TurnLockReleasing => "turn_lock_releasing",
+        }
+    }
 }
 
 impl<P: ?Sized, S: ?Sized, L> DefaultTurnPipeline<P, S, L>
@@ -252,6 +288,16 @@ where
     S: TurnStateStore + 'static,
     L: SessionTurnLock,
 {
+    async fn record_pipeline_event(
+        &self,
+        session_id: SessionId,
+        event: PipelineEventKind,
+    ) -> Result<(), TurnPipelineError> {
+        self.store
+            .persist_pipeline_event(session_id, event.as_str(), event.as_str().to_owned())
+            .await
+    }
+
     /// Parse the delta JSON, validate it, apply it, project the frontend patch,
     /// and build the two message records ready for persistence.
     ///
@@ -322,21 +368,31 @@ where
         request: TurnRequestInput,
     ) -> Result<TurnResponse, TurnPipelineError> {
         tracing::info!("turn_started");
+        self.record_pipeline_event(request.session_id, PipelineEventKind::TurnStarted)
+            .await?;
         let _guard = self.turn_lock.acquire(request.session_id).await?;
         tracing::info!("turn_lock_acquired");
+        self.record_pipeline_event(request.session_id, PipelineEventKind::TurnLockAcquired)
+            .await?;
 
         // --- Preparation: load state, classify scene, build context ---
         let prepared = self
             .prepare_turn_context(request.session_id, &request.input, request.mode)
             .await?;
         tracing::info!("context_built");
+        self.record_pipeline_event(request.session_id, PipelineEventKind::ContextBuilt)
+            .await?;
 
         // --- Non-streaming provider call: emits player_response + delta JSON ---
         let prompt = self
             .prompt_builder
             .build_non_streaming_prompt(&prepared.context, &request.input);
         tracing::info!("provider_called");
+        self.record_pipeline_event(request.session_id, PipelineEventKind::ProviderCalled)
+            .await?;
         let provider_response = self.provider.generate(prompt).await?;
+        self.record_pipeline_event(request.session_id, PipelineEventKind::ProviderResponded)
+            .await?;
         let output = match self.parser.parse_turn_output(&provider_response.text) {
             Ok(output) => output,
             Err(error) => {
@@ -357,8 +413,21 @@ where
             &request.input,
             &request.viewer,
         )?;
+        let mut finalized = finalized;
+        finalized.assistant_message.raw_provider_output = Some(
+            provider_response
+                .raw_json
+                .unwrap_or_else(|| serde_json::Value::String(provider_response.text)),
+        );
         tracing::info!("delta_applied");
+        self.record_pipeline_event(request.session_id, PipelineEventKind::DeltaApplied)
+            .await?;
         tracing::info!("frontend_state_projected");
+        self.record_pipeline_event(
+            request.session_id,
+            PipelineEventKind::FrontendStateProjected,
+        )
+        .await?;
 
         let message_id = finalized.assistant_message.id;
         self.store
@@ -371,6 +440,10 @@ where
             .await?;
 
         tracing::info!("turn_finished");
+        self.record_pipeline_event(request.session_id, PipelineEventKind::TurnFinished)
+            .await?;
+        self.record_pipeline_event(request.session_id, PipelineEventKind::TurnLockReleasing)
+            .await?;
         Ok(TurnResponse {
             message_id,
             player_response: finalized.visible_response,
@@ -387,16 +460,26 @@ where
         request: TurnRequestInput,
     ) -> Result<DebugTurnResponse, TurnPipelineError> {
         tracing::info!("debug_turn_started");
+        self.record_pipeline_event(request.session_id, PipelineEventKind::TurnStarted)
+            .await?;
         let _guard = self.turn_lock.acquire(request.session_id).await?;
+        self.record_pipeline_event(request.session_id, PipelineEventKind::TurnLockAcquired)
+            .await?;
 
         let prepared = self
             .prepare_turn_context(request.session_id, &request.input, request.mode)
+            .await?;
+        self.record_pipeline_event(request.session_id, PipelineEventKind::ContextBuilt)
             .await?;
 
         let prompt = self
             .prompt_builder
             .build_non_streaming_prompt(&prepared.context, &request.input);
+        self.record_pipeline_event(request.session_id, PipelineEventKind::ProviderCalled)
+            .await?;
         let provider_response = self.provider.generate(prompt).await?;
+        self.record_pipeline_event(request.session_id, PipelineEventKind::ProviderResponded)
+            .await?;
         let output = match self.parser.parse_turn_output(&provider_response.text) {
             Ok(output) => output,
             Err(error) => {
@@ -417,6 +500,19 @@ where
             &request.input,
             &request.viewer,
         )?;
+        let mut finalized = finalized;
+        finalized.assistant_message.raw_provider_output = Some(
+            provider_response
+                .raw_json
+                .unwrap_or_else(|| serde_json::Value::String(provider_response.text)),
+        );
+        self.record_pipeline_event(request.session_id, PipelineEventKind::DeltaApplied)
+            .await?;
+        self.record_pipeline_event(
+            request.session_id,
+            PipelineEventKind::FrontendStateProjected,
+        )
+        .await?;
 
         let message_id = finalized.assistant_message.id;
         self.store
@@ -429,6 +525,10 @@ where
             .await?;
 
         tracing::info!("debug_turn_finished");
+        self.record_pipeline_event(request.session_id, PipelineEventKind::TurnFinished)
+            .await?;
+        self.record_pipeline_event(request.session_id, PipelineEventKind::TurnLockReleasing)
+            .await?;
         Ok(DebugTurnResponse {
             turn: TurnResponse {
                 message_id,
@@ -471,6 +571,7 @@ mod tests {
         loaded: LoadedTurnState,
         persisted_state: Mutex<Option<WorldState>>,
         persisted_messages: Mutex<Vec<MessageRecord>>,
+        persisted_events: Mutex<Vec<(String, String)>>,
     }
 
     impl MemoryTurnStore {
@@ -479,6 +580,7 @@ mod tests {
                 loaded,
                 persisted_state: Mutex::new(None),
                 persisted_messages: Mutex::new(vec![]),
+                persisted_events: Mutex::new(vec![]),
             }
         }
     }
@@ -509,8 +611,25 @@ mod tests {
         async fn persist_error_event(
             &self,
             _session_id: SessionId,
-            _description: String,
+            description: String,
         ) -> Result<(), TurnPipelineError> {
+            self.persisted_events
+                .lock()
+                .expect("events mutex")
+                .push(("turn_error".into(), description));
+            Ok(())
+        }
+
+        async fn persist_pipeline_event(
+            &self,
+            _session_id: SessionId,
+            event_type: &'static str,
+            description: String,
+        ) -> Result<(), TurnPipelineError> {
+            self.persisted_events
+                .lock()
+                .expect("events mutex")
+                .push((event_type.into(), description));
             Ok(())
         }
     }
@@ -573,6 +692,7 @@ mod tests {
                 current: 1,
                 max: 6,
                 consequence: "Factions notice.".into(),
+                visible_to_player: true,
             }],
             relationships: vec![],
             inventory: vec![],
@@ -685,6 +805,59 @@ mod tests {
             assistant_message.prompt_template_version.as_deref(),
             Some(crate::PROMPT_TEMPLATE_VERSION)
         );
+    }
+
+    #[tokio::test]
+    async fn successful_turn_persists_pipeline_milestone_events() {
+        let session_id = Uuid::new_v4();
+        let scenario = scenario();
+        let store = Arc::new(MemoryTurnStore::new(LoadedTurnState {
+            world_state: world_state(session_id, scenario.id),
+            scenario,
+            recent_messages: vec![],
+        }));
+        let raw = r#"{
+            "player_response": "The guildhall falls silent.",
+            "world_state_delta": {
+                "facts_to_add": [],
+                "npc_changes": [],
+                "faction_changes": [],
+                "quest_changes": [],
+                "clock_changes": [],
+                "relationship_changes": [],
+                "location_change": null,
+                "event_log_entries": []
+            }
+        }"#;
+        let provider = Arc::new(MockProvider::new("mock", [raw.into()]));
+        let pipeline = DefaultTurnPipeline::new(provider, Arc::clone(&store));
+
+        pipeline
+            .process_turn(TurnRequestInput {
+                session_id,
+                input: "I wait.".into(),
+                mode: Some(TurnMode::Action),
+                viewer: ViewerContext::player(),
+            })
+            .await
+            .expect("turn response");
+
+        let event_types = store
+            .persisted_events
+            .lock()
+            .expect("events mutex")
+            .iter()
+            .map(|(event_type, _)| event_type.clone())
+            .collect::<Vec<_>>();
+        assert!(event_types.contains(&"turn_started".into()));
+        assert!(event_types.contains(&"turn_lock_acquired".into()));
+        assert!(event_types.contains(&"context_built".into()));
+        assert!(event_types.contains(&"provider_called".into()));
+        assert!(event_types.contains(&"provider_responded".into()));
+        assert!(event_types.contains(&"delta_applied".into()));
+        assert!(event_types.contains(&"frontend_state_projected".into()));
+        assert!(event_types.contains(&"turn_finished".into()));
+        assert!(event_types.contains(&"turn_lock_releasing".into()));
     }
 
     #[tokio::test]

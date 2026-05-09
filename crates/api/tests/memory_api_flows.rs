@@ -1,9 +1,14 @@
 mod common;
 
-use common::{json_body, memory_test_context, mock_provider, sample_scenario, send_empty, send_json};
+use common::{
+    json_body, memory_test_context, memory_test_context_with_config, mock_provider, sample_scenario,
+    send_empty, send_empty_with_bearer, send_json,
+};
 use http::StatusCode;
 use serde_json::{json, Value};
 use uuid::Uuid;
+
+const ADMIN_TOKEN: &str = "test-admin-token";
 
 // ---------------------------------------------------------------------------
 // Health
@@ -18,6 +23,33 @@ async fn health_returns_memory_database_status() {
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(payload["database"], "memory");
+}
+
+#[tokio::test]
+async fn admin_routes_return_404_when_disabled() {
+    let router = memory_test_context(mock_provider(Vec::<String>::new()));
+
+    let (status, _) = send_empty(&router, "GET", "/admin/sessions/00000000-0000-0000-0000-000000000000/export/raw").await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn admin_routes_require_bearer_token_when_enabled() {
+    let mut config = shared::AppConfig::default();
+    config.storage.backend = shared::StorageBackend::Memory;
+    config.admin.enabled = true;
+    config.admin.token = Some(ADMIN_TOKEN.into());
+    let router = memory_test_context_with_config(mock_provider(Vec::<String>::new()), config);
+
+    let path = "/admin/sessions/00000000-0000-0000-0000-000000000000/export/raw";
+    let (missing_status, _) = send_empty(&router, "GET", path).await;
+    let (wrong_status, _) = send_empty_with_bearer(&router, "GET", path, "wrong-token").await;
+    let (correct_status, _) = send_empty_with_bearer(&router, "GET", path, ADMIN_TOKEN).await;
+
+    assert_eq!(missing_status, StatusCode::UNAUTHORIZED);
+    assert_eq!(wrong_status, StatusCode::UNAUTHORIZED);
+    assert_eq!(correct_status, StatusCode::NOT_FOUND);
 }
 
 // ---------------------------------------------------------------------------

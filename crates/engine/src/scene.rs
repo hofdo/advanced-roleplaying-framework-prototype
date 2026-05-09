@@ -33,6 +33,34 @@ impl SceneClassifier for RuleBasedSceneClassifier {
             return SceneReasoningStyle::MysteryInvestigation;
         }
 
+        if contains_any(
+            &lower,
+            &["comfort", "grieve", "confess", "reassure", "weep", "embrace"],
+        ) {
+            return SceneReasoningStyle::EmotionalScene;
+        }
+
+        if contains_any(
+            &lower,
+            &["travel", "journey", "camp", "road", "trail", "explore", "scout"],
+        ) {
+            return SceneReasoningStyle::TravelExploration;
+        }
+
+        if contains_any(
+            &lower,
+            &["rest", "relax", "shop", "train", "downtime", "recover", "craft"],
+        ) {
+            return SceneReasoningStyle::Downtime;
+        }
+
+        if contains_any(
+            &lower,
+            &["turn in", "report back", "claim reward", "quest complete", "mission complete"],
+        ) {
+            return SceneReasoningStyle::QuestResolution;
+        }
+
         if contains_any(&lower, &["class", "stats", "rule", "ability", "level"]) {
             return SceneReasoningStyle::RulesAdjudication;
         }
@@ -132,6 +160,38 @@ mod tests {
         assert_eq!(
             RuleBasedSceneClassifier.classify("I investigate the clue", &state(Some("combat"))),
             SceneReasoningStyle::TacticalCombat
+        );
+    }
+
+    #[test]
+    fn emotional_keywords_select_emotional_scene() {
+        assert_eq!(
+            RuleBasedSceneClassifier.classify("I comfort her after the funeral.", &state(None)),
+            SceneReasoningStyle::EmotionalScene
+        );
+    }
+
+    #[test]
+    fn travel_keywords_select_travel_exploration() {
+        assert_eq!(
+            RuleBasedSceneClassifier.classify("We travel the road and scout ahead.", &state(None)),
+            SceneReasoningStyle::TravelExploration
+        );
+    }
+
+    #[test]
+    fn downtime_keywords_select_downtime() {
+        assert_eq!(
+            RuleBasedSceneClassifier.classify("I rest, shop, and recover for a day.", &state(None)),
+            SceneReasoningStyle::Downtime
+        );
+    }
+
+    #[test]
+    fn quest_resolution_keywords_select_quest_resolution() {
+        assert_eq!(
+            RuleBasedSceneClassifier.classify("I report back and claim the reward.", &state(None)),
+            SceneReasoningStyle::QuestResolution
         );
     }
 }

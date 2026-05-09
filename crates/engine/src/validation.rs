@@ -1,6 +1,7 @@
 use domain::{
-    ClockChange, EntityKey, FactSource, FactVisibility, FactionChange, LocationChange, NpcChange,
-    NpcStatus, QuestChange, RelationshipChange, Scenario, WorldState, WorldStateDelta,
+    ClockChange, EntityKey, FactSource, FactVisibility, FactionChange, InventoryChange,
+    LocationChange, NpcChange, NpcStatus, QuestChange, RelationshipChange, Scenario, WorldState,
+    WorldStateDelta,
     validate_npc_status_transition,
 };
 use std::collections::HashSet;
@@ -54,6 +55,21 @@ impl DeltaValidator for BasicDeltaValidator {
             .map(|location| location.id.as_str())
             .collect::<HashSet<_>>();
 
+        if let Some(scene_change) = &delta.scene_change {
+            require_reason(&scene_change.reason)?;
+        }
+
+        if let Some(active_speaker_change) = &delta.active_speaker_change {
+            require_reason(&active_speaker_change.reason)?;
+            if let Some(speaker_id) = &active_speaker_change.speaker_id {
+                require_known("npc", speaker_id, &npc_ids)?;
+            }
+        }
+
+        if let Some(summary_update) = &delta.summary_update {
+            require_reason(&summary_update.reason)?;
+        }
+
         for fact in &delta.facts_to_add {
             require_reason(&fact.reason)?;
             if fact.visibility == FactVisibility::PlayerKnown
@@ -79,14 +95,16 @@ impl DeltaValidator for BasicDeltaValidator {
                 NpcChange::AttitudeChanged { npc_id, .. }
                 | NpcChange::KnowledgeAdded { npc_id, .. }
                 | NpcChange::StatusChanged { npc_id, .. }
-                | NpcChange::LocationChanged { npc_id, .. } => npc_id,
+                | NpcChange::LocationChanged { npc_id, .. }
+                | NpcChange::NoteAdded { npc_id, .. } => npc_id,
             };
 
             match change {
                 NpcChange::AttitudeChanged { reason, .. }
                 | NpcChange::KnowledgeAdded { reason, .. }
                 | NpcChange::StatusChanged { reason, .. }
-                | NpcChange::LocationChanged { reason, .. } => {
+                | NpcChange::LocationChanged { reason, .. }
+                | NpcChange::NoteAdded { reason, .. } => {
                     require_known("npc", npc_id, &npc_ids)?;
                     require_reason(reason)?;
                 }
@@ -114,6 +132,7 @@ impl DeltaValidator for BasicDeltaValidator {
                             });
                         }
                     }
+                    NpcChange::NoteAdded { .. } => {}
                     NpcChange::StatusChanged { .. } => {} // Always allowed — this is how you change status
                 }
             }
@@ -182,6 +201,15 @@ impl DeltaValidator for BasicDeltaValidator {
                     require_known("faction", faction_id, &faction_ids)?;
                     require_reason(reason)?;
                 }
+                FactionChange::PublicNoteAdded {
+                    faction_id, reason, ..
+                }
+                | FactionChange::HiddenNoteAdded {
+                    faction_id, reason, ..
+                } => {
+                    require_known("faction", faction_id, &faction_ids)?;
+                    require_reason(reason)?;
+                }
             }
         }
 
@@ -240,16 +268,30 @@ impl DeltaValidator for BasicDeltaValidator {
                         });
                     }
                 }
+                ClockChange::VisibilityChanged {
+                    clock_id, reason, ..
+                } => {
+                    require_known("clock", clock_id, &clock_ids)?;
+                    require_reason(reason)?;
+                }
             }
         }
 
         for change in &delta.relationship_changes {
-            let RelationshipChange::Changed {
-                source_id,
-                target_id,
-                reason,
-                ..
-            } = change;
+            let (source_id, target_id, reason) = match change {
+                RelationshipChange::Changed {
+                    source_id,
+                    target_id,
+                    reason,
+                    ..
+                }
+                | RelationshipChange::NoteAdded {
+                    source_id,
+                    target_id,
+                    reason,
+                    ..
+                } => (source_id, target_id, reason),
+            };
             require_reason(reason)?;
             if !npc_ids.contains(source_id.as_str()) && !faction_ids.contains(source_id.as_str()) {
                 return Err(DeltaValidationError::UnknownEntity {
@@ -262,6 +304,33 @@ impl DeltaValidator for BasicDeltaValidator {
                     entity: "relationship target",
                     id: target_id.clone(),
                 });
+            }
+        }
+
+        let inventory_ids = world_state
+            .inventory
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect::<HashSet<_>>();
+        for change in &delta.inventory_changes {
+            match change {
+                InventoryChange::Added { item, reason } => {
+                    require_reason(reason)?;
+                    if item.id.trim().is_empty() {
+                        return Err(DeltaValidationError::UnknownEntity {
+                            entity: "inventory item",
+                            id: item.id.clone(),
+                        });
+                    }
+                }
+                InventoryChange::Removed { item_id, reason } => {
+                    require_reason(reason)?;
+                    require_known("inventory item", item_id, &inventory_ids)?;
+                }
+                InventoryChange::Updated { item, reason } => {
+                    require_reason(reason)?;
+                    require_known("inventory item", &item.id, &inventory_ids)?;
+                }
             }
         }
 
@@ -444,6 +513,7 @@ mod tests {
                 current: 1,
                 max: 6,
                 consequence: "Factions notice.".into(),
+                visible_to_player: true,
             }],
             relationships: vec![],
             inventory: vec![],
@@ -703,5 +773,90 @@ mod tests {
         BasicDeltaValidator
             .validate(&scenario(), &world, &delta)
             .expect("active NPC gaining knowledge must be allowed");
+    }
+
+    #[test]
+    fn validator_accepts_new_state_mutation_variants_when_entities_exist() {
+        let mut world = state();
+        world.current_scene = Some("dialogue".into());
+        world.active_speaker_id = Some("examiner".into());
+        world.factions.push(FactionState {
+            faction_id: "guild".into(),
+            standing: 0,
+            public_notes: vec![],
+            hidden_notes: vec![],
+            revealed_goals: vec![],
+        });
+        world.relationships.push(RelationshipState {
+            source_id: "examiner".into(),
+            target_id: "guild".into(),
+            attitude: 0,
+            notes: vec![],
+        });
+        world.clocks.push(ClockState {
+            id: "fame".into(),
+            title: "Fame".into(),
+            current: 1,
+            max: 6,
+            consequence: "Witnesses notice.".into(),
+            visible_to_player: true,
+        });
+
+        let delta = WorldStateDelta {
+            scene_change: Some(domain::SceneChange {
+                scene: Some("combat".into()),
+                reason: "The confrontation escalated.".into(),
+            }),
+            active_speaker_change: Some(domain::ActiveSpeakerChange {
+                speaker_id: Some("examiner".into()),
+                reason: "The examiner took command.".into(),
+            }),
+            summary_update: Some(domain::SummaryUpdate {
+                summary: Some("The guildhall confrontation turned violent.".into()),
+                reason: "The turn summary should persist.".into(),
+            }),
+            inventory_changes: vec![domain::InventoryChange::Added {
+                item: domain::InventoryItem {
+                    id: "ritual-knife".into(),
+                    name: "Ritual Knife".into(),
+                    description: "Warm and humming.".into(),
+                    visible: true,
+                },
+                reason: "The player picked it up.".into(),
+            }],
+            npc_changes: vec![NpcChange::NoteAdded {
+                npc_id: "examiner".into(),
+                note: "The player remains unstable.".into(),
+                reason: "Persistent NPC memory.".into(),
+            }],
+            faction_changes: vec![
+                FactionChange::PublicNoteAdded {
+                    faction_id: "guild".into(),
+                    note: "The guildhall is on alert.".into(),
+                    reason: "Persistent public faction memory.".into(),
+                },
+                FactionChange::HiddenNoteAdded {
+                    faction_id: "guild".into(),
+                    note: "An internal inquiry began.".into(),
+                    reason: "Persistent hidden faction memory.".into(),
+                },
+            ],
+            relationship_changes: vec![RelationshipChange::NoteAdded {
+                source_id: "examiner".into(),
+                target_id: "guild".into(),
+                note: "The examiner now reports directly to guild masters.".into(),
+                reason: "Persistent relationship memory.".into(),
+            }],
+            clock_changes: vec![ClockChange::VisibilityChanged {
+                clock_id: "fame".into(),
+                visible_to_player: false,
+                reason: "The clock should be hidden from players.".into(),
+            }],
+            ..WorldStateDelta::default()
+        };
+
+        let result = BasicDeltaValidator.validate(&scenario(), &world, &delta);
+
+        assert!(result.is_ok());
     }
 }

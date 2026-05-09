@@ -1,7 +1,8 @@
 use crate::ValidatedWorldStateDelta;
 use domain::{
-    ClockChange, Fact, FactSource, FactionChange, NpcChange, QuestChange, QuestStatus,
-    RelationshipChange, RelationshipState, WorldState,
+    ActiveSpeakerChange, ClockChange, Fact, FactSource, FactionChange, InventoryChange,
+    NpcChange, QuestChange, QuestStatus, RelationshipChange, RelationshipState, SceneChange,
+    SummaryUpdate, WorldState,
 };
 
 pub trait WorldStateReducer: Send + Sync {
@@ -14,6 +15,18 @@ pub struct BasicWorldStateReducer;
 impl WorldStateReducer for BasicWorldStateReducer {
     fn apply(&self, mut state: WorldState, delta: ValidatedWorldStateDelta) -> WorldState {
         let delta = delta.0;
+
+        if let Some(SceneChange { scene, .. }) = delta.scene_change {
+            state.current_scene = scene;
+        }
+
+        if let Some(ActiveSpeakerChange { speaker_id, .. }) = delta.active_speaker_change {
+            state.active_speaker_id = speaker_id;
+        }
+
+        if let Some(SummaryUpdate { summary, .. }) = delta.summary_update {
+            state.summary = summary;
+        }
 
         for fact in delta.facts_to_add {
             let id = format!("fact-{}-{}", state.version + 1, state.facts.len() + 1);
@@ -77,6 +90,11 @@ impl WorldStateReducer for BasicWorldStateReducer {
                         npc.location_id = Some(location_id);
                     }
                 }
+                NpcChange::NoteAdded { npc_id, note, .. } => {
+                    if let Some(npc) = state.npcs.iter_mut().find(|npc| npc.npc_id == npc_id) {
+                        npc.notes.push(note);
+                    }
+                }
             }
         }
 
@@ -104,6 +122,28 @@ impl WorldStateReducer for BasicWorldStateReducer {
                         .find(|faction| faction.faction_id == faction_id)
                     {
                         faction.revealed_goals.push(goal);
+                    }
+                }
+                FactionChange::PublicNoteAdded {
+                    faction_id, note, ..
+                } => {
+                    if let Some(faction) = state
+                        .factions
+                        .iter_mut()
+                        .find(|faction| faction.faction_id == faction_id)
+                    {
+                        faction.public_notes.push(note);
+                    }
+                }
+                FactionChange::HiddenNoteAdded {
+                    faction_id, note, ..
+                } => {
+                    if let Some(faction) = state
+                        .factions
+                        .iter_mut()
+                        .find(|faction| faction.faction_id == faction_id)
+                    {
+                        faction.hidden_notes.push(note);
                     }
                 }
             }
@@ -163,7 +203,9 @@ impl WorldStateReducer for BasicWorldStateReducer {
                 } => {
                     if let Some(clock) = state.clocks.iter_mut().find(|clock| clock.id == clock_id)
                     {
-                        clock.current = (clock.current as i16 + delta as i16) as u8;
+                        let next = (i16::from(clock.current) + i16::from(delta))
+                            .clamp(0, i16::from(clock.max));
+                        clock.current = next as u8;
                     }
                 }
                 ClockChange::SetValue {
@@ -171,30 +213,84 @@ impl WorldStateReducer for BasicWorldStateReducer {
                 } => {
                     if let Some(clock) = state.clocks.iter_mut().find(|clock| clock.id == clock_id)
                     {
-                        clock.current = value;
+                        clock.current = value.min(clock.max);
+                    }
+                }
+                ClockChange::VisibilityChanged {
+                    clock_id,
+                    visible_to_player,
+                    ..
+                } => {
+                    if let Some(clock) = state.clocks.iter_mut().find(|clock| clock.id == clock_id)
+                    {
+                        clock.visible_to_player = visible_to_player;
+                    }
+                }
+            }
+        }
+
+        for change in delta.inventory_changes {
+            match change {
+                InventoryChange::Added { item, .. } => {
+                    if let Some(existing) = state.inventory.iter_mut().find(|entry| entry.id == item.id)
+                    {
+                        *existing = item;
+                    } else {
+                        state.inventory.push(item);
+                    }
+                }
+                InventoryChange::Removed { item_id, .. } => {
+                    state.inventory.retain(|item| item.id != item_id);
+                }
+                InventoryChange::Updated { item, .. } => {
+                    if let Some(existing) = state.inventory.iter_mut().find(|entry| entry.id == item.id)
+                    {
+                        *existing = item;
                     }
                 }
             }
         }
 
         for change in delta.relationship_changes {
-            let RelationshipChange::Changed {
-                source_id,
-                target_id,
-                attitude_delta,
-                ..
-            } = change;
-            if let Some(relationship) = state.relationships.iter_mut().find(|relationship| {
-                relationship.source_id == source_id && relationship.target_id == target_id
-            }) {
-                relationship.attitude += attitude_delta;
-            } else {
-                state.relationships.push(RelationshipState {
+            match change {
+                RelationshipChange::Changed {
                     source_id,
                     target_id,
-                    attitude: attitude_delta,
-                    notes: vec![],
-                });
+                    attitude_delta,
+                    ..
+                } => {
+                    if let Some(relationship) = state.relationships.iter_mut().find(|relationship| {
+                        relationship.source_id == source_id && relationship.target_id == target_id
+                    }) {
+                        relationship.attitude += attitude_delta;
+                    } else {
+                        state.relationships.push(RelationshipState {
+                            source_id,
+                            target_id,
+                            attitude: attitude_delta,
+                            notes: vec![],
+                        });
+                    }
+                }
+                RelationshipChange::NoteAdded {
+                    source_id,
+                    target_id,
+                    note,
+                    ..
+                } => {
+                    if let Some(relationship) = state.relationships.iter_mut().find(|relationship| {
+                        relationship.source_id == source_id && relationship.target_id == target_id
+                    }) {
+                        relationship.notes.push(note);
+                    } else {
+                        state.relationships.push(RelationshipState {
+                            source_id,
+                            target_id,
+                            attitude: 0,
+                            notes: vec![note],
+                        });
+                    }
+                }
             }
         }
 
@@ -239,6 +335,7 @@ mod tests {
                 current: 1,
                 max: 6,
                 consequence: "Notice.".into(),
+                visible_to_player: true,
             }],
             relationships: vec![],
             inventory: vec![],
@@ -422,6 +519,7 @@ mod tests {
                 current: 2,
                 max: 6,
                 consequence: "Notice.".into(),
+                visible_to_player: true,
             }],
             relationships: vec![],
             inventory: vec![],
@@ -662,5 +760,123 @@ mod tests {
         let result = BasicWorldStateReducer.apply(state, delta);
 
         assert_eq!(result.current_location_id, Some("dungeon".into()));
+    }
+
+    #[test]
+    fn reducer_updates_scene_summary_speaker_inventory_and_notes() {
+        let state = WorldState {
+            session_id: Uuid::new_v4(),
+            scenario_id: Uuid::new_v4(),
+            version: 2,
+            current_location_id: Some("guildhall".into()),
+            current_scene: Some("dialogue".into()),
+            active_speaker_id: Some("examiner".into()),
+            facts: vec![],
+            npcs: vec![NpcState {
+                npc_id: "examiner".into(),
+                status: NpcStatus::Active,
+                visible_to_player: true,
+                location_id: Some("guildhall".into()),
+                attitude_to_player: None,
+                known_facts: vec![],
+                notes: vec![],
+            }],
+            factions: vec![FactionState {
+                faction_id: "guild".into(),
+                standing: 0,
+                public_notes: vec![],
+                hidden_notes: vec![],
+                revealed_goals: vec![],
+            }],
+            quests: vec![],
+            clocks: vec![ClockState {
+                id: "panic".into(),
+                title: "Panic".into(),
+                current: 1,
+                max: 6,
+                consequence: "The guild locks down.".into(),
+                visible_to_player: true,
+            }],
+            relationships: vec![RelationshipState {
+                source_id: "examiner".into(),
+                target_id: "guild".into(),
+                attitude: 1,
+                notes: vec![],
+            }],
+            inventory: vec![],
+            summary: Some("Before the confrontation".into()),
+            recent_events: vec![],
+        };
+        let delta = ValidatedWorldStateDelta(WorldStateDelta {
+            scene_change: Some(SceneChange {
+                scene: Some("combat".into()),
+                reason: "Weapons were drawn.".into(),
+            }),
+            active_speaker_change: Some(ActiveSpeakerChange {
+                speaker_id: Some("seraphyne".into()),
+                reason: "She took over the scene.".into(),
+            }),
+            summary_update: Some(SummaryUpdate {
+                summary: Some("Combat erupted after the accusation.".into()),
+                reason: "Long-term context should retain the escalation.".into(),
+            }),
+            inventory_changes: vec![InventoryChange::Added {
+                item: InventoryItem {
+                    id: "ritual-knife".into(),
+                    name: "Ritual Knife".into(),
+                    description: "Warm and humming.".into(),
+                    visible: true,
+                },
+                reason: "The player claimed it from the altar.".into(),
+            }],
+            npc_changes: vec![NpcChange::NoteAdded {
+                npc_id: "examiner".into(),
+                note: "Still suspects the player is unstable.".into(),
+                reason: "NPC memory should persist.".into(),
+            }],
+            faction_changes: vec![
+                FactionChange::PublicNoteAdded {
+                    faction_id: "guild".into(),
+                    note: "Publicly warned the hall.".into(),
+                    reason: "Public faction memory should persist.".into(),
+                },
+                FactionChange::HiddenNoteAdded {
+                    faction_id: "guild".into(),
+                    note: "Opened a covert inquiry.".into(),
+                    reason: "Hidden faction memory should persist.".into(),
+                },
+            ],
+            relationship_changes: vec![RelationshipChange::NoteAdded {
+                source_id: "examiner".into(),
+                target_id: "guild".into(),
+                note: "The examiner now reports directly to the guild masters.".into(),
+                reason: "Relationship memory should persist.".into(),
+            }],
+            clock_changes: vec![ClockChange::VisibilityChanged {
+                clock_id: "panic".into(),
+                visible_to_player: false,
+                reason: "The countdown became hidden.".into(),
+            }],
+            ..WorldStateDelta::default()
+        });
+
+        let next = BasicWorldStateReducer.apply(state, delta);
+
+        assert_eq!(next.current_scene.as_deref(), Some("combat"));
+        assert_eq!(next.active_speaker_id.as_deref(), Some("seraphyne"));
+        assert_eq!(
+            next.summary.as_deref(),
+            Some("Combat erupted after the accusation.")
+        );
+        assert_eq!(next.inventory.len(), 1);
+        assert_eq!(next.inventory[0].id, "ritual-knife");
+        assert_eq!(next.npcs[0].notes, vec!["Still suspects the player is unstable."]);
+        assert_eq!(next.factions[0].public_notes, vec!["Publicly warned the hall."]);
+        assert_eq!(next.factions[0].hidden_notes, vec!["Opened a covert inquiry."]);
+        assert_eq!(
+            next.relationships[0].notes,
+            vec!["The examiner now reports directly to the guild masters."]
+        );
+        assert!(!next.clocks[0].visible_to_player);
     }
 }

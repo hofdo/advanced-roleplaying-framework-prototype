@@ -33,6 +33,18 @@ impl TestContext {
 pub async fn postgres_test_context(
     provider: Arc<dyn LlmProvider>,
 ) -> anyhow::Result<TestContext> {
+    postgres_test_context_with_config(provider, {
+        let mut config = shared::AppConfig::default();
+        config.storage.backend = shared::StorageBackend::Postgres;
+        config
+    })
+    .await
+}
+
+pub async fn postgres_test_context_with_config(
+    provider: Arc<dyn LlmProvider>,
+    config: shared::AppConfig,
+) -> anyhow::Result<TestContext> {
     let container = Postgres::default()
         .with_db_name("roleplay")
         .with_user("roleplay")
@@ -50,9 +62,10 @@ pub async fn postgres_test_context(
     let persistence = persistence::PgPersistence::from_pool(pool.clone());
     persistence.migrate().await?;
 
-    let mut config = shared::AppConfig::default();
-    config.storage.backend = shared::StorageBackend::Postgres;
-    let store = Arc::new(PostgresApplicationStore::new(persistence));
+    let store = Arc::new(PostgresApplicationStore::new(
+        persistence,
+        config.debug.store_raw_provider_output,
+    ));
     let turn_lock: Arc<dyn SessionTurnLock> =
         Arc::new(PostgresSessionTurnLock::new(pool.clone()));
     let state = AppState::from_parts(config, store, provider, turn_lock);
@@ -112,16 +125,74 @@ pub async fn send_empty(
     (status, body)
 }
 
+pub async fn send_json_with_bearer(
+    router: &Router,
+    method: &str,
+    path: &str,
+    token: &str,
+    value: serde_json::Value,
+) -> (http::StatusCode, bytes::Bytes) {
+    let request = Request::builder()
+        .method(method)
+        .uri(path)
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .header(http::header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::from(value.to_string()))
+        .expect("request");
+    let response = router.clone().oneshot(request).await.expect("response");
+    let status = response.status();
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body collection")
+        .to_bytes();
+    (status, body)
+}
+
+pub async fn send_empty_with_bearer(
+    router: &Router,
+    method: &str,
+    path: &str,
+    token: &str,
+) -> (http::StatusCode, bytes::Bytes) {
+    let request = Request::builder()
+        .method(method)
+        .uri(path)
+        .header(http::header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::empty())
+        .expect("request");
+    let response = router.clone().oneshot(request).await.expect("response");
+    let status = response.status();
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body collection")
+        .to_bytes();
+    (status, body)
+}
+
 pub fn json_body<T: DeserializeOwned>(body: &[u8]) -> T {
     serde_json::from_slice(body).expect("json body")
 }
 
 pub fn memory_test_context(provider: Arc<dyn LlmProvider>) -> Router {
-    let mut config = shared::AppConfig::default();
-    config.storage.backend = shared::StorageBackend::Memory;
+    memory_test_context_with_config(provider, {
+        let mut config = shared::AppConfig::default();
+        config.storage.backend = shared::StorageBackend::Memory;
+        config
+    })
+}
+
+pub fn memory_test_context_with_config(
+    provider: Arc<dyn LlmProvider>,
+    config: shared::AppConfig,
+) -> Router {
+    let store_raw_provider_output = config.debug.store_raw_provider_output;
     let state = AppState::from_parts(
         config,
-        Arc::new(ApiStore::default()),
+        Arc::new(ApiStore::new(store_raw_provider_output)),
         provider,
         Arc::new(InMemorySessionTurnLock::default()),
     );

@@ -1,8 +1,11 @@
 use crate::{ApiError, AppState, project_session_state, provider_from_record};
 use axum::{
+    body::Body,
     Json, Router,
     extract::{Path, State},
-    http::StatusCode,
+    http::{Request, StatusCode, header},
+    middleware::{self, Next},
+    response::Response,
     response::sse::{Event, Sse},
     routing::{delete, get, patch, post},
 };
@@ -17,7 +20,7 @@ use std::{convert::Infallible, sync::Arc};
 use uuid::Uuid;
 
 pub fn app_router(app_state: AppState) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/health", get(health))
         .route("/providers", get(list_providers).post(register_provider))
         .route("/providers/test", post(test_provider))
@@ -44,18 +47,52 @@ pub fn app_router(app_state: AppState) -> Router {
         .route("/sessions/:session_id/turn", post(turn))
         .route("/sessions/:session_id/turn/stream", post(turn_stream))
         .route("/sessions/:session_id/world-state", get(get_world_state))
-        .route("/sessions/:session_id/events", get(list_events))
-        // Raw (admin) export — returns the full WorldState without projection.
-        // TODO: guard with authentication before exposing in production.
-        .route(
-            "/admin/sessions/:session_id/export/raw",
-            get(export_session_raw),
+        .route("/sessions/:session_id/events", get(list_events));
+
+    let router = if app_state.config.admin.enabled {
+        router.merge(
+            Router::new()
+                .route(
+                    "/admin/sessions/:session_id/export/raw",
+                    get(export_session_raw),
+                )
+                .route(
+                    "/admin/sessions/:session_id/turn/debug",
+                    post(debug_turn),
+                )
+                .route_layer(middleware::from_fn_with_state(
+                    app_state.clone(),
+                    require_admin_token,
+                )),
         )
-        .route(
-            "/admin/sessions/:session_id/turn/debug",
-            post(debug_turn),
-        )
-        .with_state(app_state)
+    } else {
+        router
+    };
+
+    router.with_state(app_state)
+}
+
+async fn require_admin_token(
+    State(state): State<AppState>,
+    request: Request<Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let Some(expected_token) = state.config.admin.token.as_deref() else {
+        return Err(StatusCode::UNAUTHORIZED);
+    };
+    let Some(value) = request.headers().get(header::AUTHORIZATION) else {
+        return Err(StatusCode::UNAUTHORIZED);
+    };
+    let Ok(value) = value.to_str() else {
+        return Err(StatusCode::UNAUTHORIZED);
+    };
+    let Some(actual_token) = value.strip_prefix("Bearer ") else {
+        return Err(StatusCode::UNAUTHORIZED);
+    };
+    if actual_token != expected_token {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    Ok(next.run(request).await)
 }
 
 async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
@@ -405,6 +442,14 @@ async fn turn_stream(
             state.turn_lock.clone(),
         );
 
+        if let Err(error) = pipeline.store
+            .persist_pipeline_event(session_id, "turn_started", "turn_started".into())
+            .await
+        {
+            yield Ok(error_event(error.to_string()));
+            return;
+        }
+
         let _guard = match pipeline.turn_lock.acquire(session_id).await {
             Ok(guard) => guard,
             Err(error) => {
@@ -412,6 +457,13 @@ async fn turn_stream(
                 return;
             }
         };
+        if let Err(error) = pipeline.store
+            .persist_pipeline_event(session_id, "turn_lock_acquired", "turn_lock_acquired".into())
+            .await
+        {
+            yield Ok(error_event(error.to_string()));
+            return;
+        }
 
         // --- Preparation (lock, load, classify, context) ---
         let prepared = match pipeline.prepare_turn_context(session_id, &input, mode).await {
@@ -421,13 +473,35 @@ async fn turn_stream(
                 return;
             }
         };
+        if let Err(error) = pipeline.store
+            .persist_pipeline_event(session_id, "context_built", "context_built".into())
+            .await
+        {
+            yield Ok(error_event(error.to_string()));
+            return;
+        }
 
         // --- Streaming (unique to this path) ---
+        if let Err(error) = pipeline.store
+            .persist_pipeline_event(session_id, "provider_called", "provider_called".into())
+            .await
+        {
+            yield Ok(error_event(error.to_string()));
+            return;
+        }
         let token_stream = match resolved_provider
             .stream(pipeline.prompt_builder.build_streaming_prompt(&prepared.context, &input))
             .await
         {
-            Ok(stream) => stream,
+            Ok(stream) => {
+                let _ = pipeline.store
+                    .persist_pipeline_event(session_id, "provider_responded", "provider_responded".into())
+                    .await;
+                let _ = pipeline.store
+                    .persist_pipeline_event(session_id, "stream_started", "stream_started".into())
+                    .await;
+                stream
+            }
             Err(error) => {
                 yield Ok(error_event(error.to_string()));
                 return;
@@ -454,6 +528,15 @@ async fn turn_stream(
                         .expect("token event serializes"));
                 }
                 Err(error) => {
+                    if matches!(error, providers::ProviderError::StreamIdleTimeout) {
+                        let _ = pipeline.store
+                            .persist_pipeline_event(
+                                session_id,
+                                "provider_stream_idle_timeout",
+                                "provider_stream_idle_timeout".into(),
+                            )
+                            .await;
+                    }
                     yield Ok(error_event(error.to_string()));
                     return;
                 }
@@ -496,6 +579,23 @@ async fn turn_stream(
                 return;
             }
         };
+        let mut finalized = finalized;
+        finalized.assistant_message.raw_provider_output = Some(serde_json::json!({
+            "visible_response_text": visible_response,
+            "delta_raw_output": delta_response
+                .raw_json
+                .unwrap_or_else(|| serde_json::Value::String(delta_response.text)),
+        }));
+        let _ = pipeline.store
+            .persist_pipeline_event(session_id, "delta_applied", "delta_applied".into())
+            .await;
+        let _ = pipeline.store
+            .persist_pipeline_event(
+                session_id,
+                "frontend_state_projected",
+                "frontend_state_projected".into(),
+            )
+            .await;
 
         let message_id = finalized.assistant_message.id;
         let world_state_version = finalized.world_state_version;
@@ -513,6 +613,12 @@ async fn turn_stream(
             yield Ok(error_event(error.to_string()));
             return;
         }
+        let _ = pipeline.store
+            .persist_pipeline_event(session_id, "turn_finished", "turn_finished".into())
+            .await;
+        let _ = pipeline.store
+            .persist_pipeline_event(session_id, "turn_lock_releasing", "turn_lock_releasing".into())
+            .await;
 
         yield Ok(Event::default()
             .event("final")

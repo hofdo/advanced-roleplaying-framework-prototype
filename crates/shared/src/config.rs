@@ -8,6 +8,7 @@ pub struct AppConfig {
     pub database: DatabaseConfig,
     pub storage: StorageConfig,
     pub provider: ProviderSection,
+    pub admin: AdminConfig,
     pub debug: DebugConfig,
 }
 
@@ -40,8 +41,32 @@ impl AppConfig {
         if let Ok(api_key) = std::env::var("LLM_API_KEY") {
             config.provider.default.api_key = Some(api_key);
         }
+        if let Ok(enabled) = std::env::var("ENABLE_ADMIN_ROUTES") {
+            config.admin.enabled = parse_bool_env(&enabled)
+                .context("ENABLE_ADMIN_ROUTES must be a boolean")?;
+        }
+        if let Ok(token) = std::env::var("ADMIN_TOKEN") {
+            config.admin.token = Some(token);
+        }
+
+        config.validate()?;
 
         Ok(config)
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.admin.enabled
+            && self
+                .admin
+                .token
+                .as_deref()
+                .map(str::trim)
+                .filter(|token| !token.is_empty())
+                .is_none()
+        {
+            anyhow::bail!("ADMIN_TOKEN must be set when ENABLE_ADMIN_ROUTES is enabled");
+        }
+        Ok(())
     }
 }
 
@@ -73,6 +98,10 @@ impl Default for AppConfig {
                     stream_idle_timeout_seconds: 30,
                     max_retries: 1,
                 },
+            },
+            admin: AdminConfig {
+                enabled: false,
+                token: None,
             },
             debug: DebugConfig {
                 store_raw_provider_output: false,
@@ -126,6 +155,12 @@ pub struct ProviderSection {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AdminConfig {
+    pub enabled: bool,
+    pub token: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProviderConfig {
     pub name: String,
     pub provider_type: String,
@@ -146,6 +181,14 @@ pub struct DebugConfig {
     pub allow_debug_state: bool,
 }
 
+fn parse_bool_env(value: &str) -> anyhow::Result<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(true),
+        "0" | "false" | "no" | "off" => Ok(false),
+        _ => anyhow::bail!("invalid boolean value"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,6 +201,8 @@ mod tests {
         assert_eq!(config.storage.backend, StorageBackend::Postgres);
         assert!(config.storage.migrate_on_startup);
         assert_eq!(config.provider.default.base_url, "http://localhost:8081/v1");
+        assert!(!config.admin.enabled);
+        assert_eq!(config.admin.token, None);
         assert!(!config.debug.store_raw_provider_output);
     }
 
@@ -170,6 +215,20 @@ mod tests {
         assert_eq!(
             "postgres".parse::<StorageBackend>().unwrap(),
             StorageBackend::Postgres
+        );
+    }
+
+    #[test]
+    fn validate_rejects_enabled_admin_without_token() {
+        let mut config = AppConfig::default();
+        config.admin.enabled = true;
+
+        let error = config.validate().expect_err("admin config should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("ADMIN_TOKEN must be set when ENABLE_ADMIN_ROUTES is enabled")
         );
     }
 }

@@ -100,6 +100,8 @@ pub enum ProviderError {
     Transport(String),
     #[error("provider timeout")]
     Timeout,
+    #[error("provider stream idle timeout")]
+    StreamIdleTimeout,
     #[error("provider rate-limited (HTTP 429)")]
     RateLimit,
     #[error("provider returned status {status}: {body}")]
@@ -119,6 +121,7 @@ pub fn is_retryable(error: &ProviderError) -> bool {
     match error {
         ProviderError::Transport(_) => true,
         ProviderError::Timeout => true,
+        ProviderError::StreamIdleTimeout => true,
         ProviderError::RateLimit => true,
         ProviderError::Status { status, .. } => *status == 429 || *status >= 500,
         ProviderError::MalformedResponse(_) => false,
@@ -135,6 +138,7 @@ mod tests {
     fn transport_errors_are_retryable() {
         assert!(is_retryable(&ProviderError::Transport("err".into())));
         assert!(is_retryable(&ProviderError::Timeout));
+        assert!(is_retryable(&ProviderError::StreamIdleTimeout));
         assert!(is_retryable(&ProviderError::RateLimit));
     }
 
