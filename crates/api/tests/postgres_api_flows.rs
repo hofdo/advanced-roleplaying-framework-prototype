@@ -10,9 +10,12 @@ use std::sync::{
     Arc,
 };
 use common::{
-    json_body, mock_provider, postgres_test_context, sample_scenario, send_empty, send_json,
+    json_body, mock_provider, postgres_test_context, postgres_test_context_with_config,
+    sample_scenario, send_empty, send_empty_with_bearer, send_json, send_json_with_bearer,
 };
 use tower::util::ServiceExt;
+
+const ADMIN_TOKEN: &str = "test-admin-token";
 
 #[tokio::test]
 #[ignore = "requires docker daemon via testcontainers"]
@@ -116,7 +119,11 @@ async fn non_streaming_turn_persists_messages_delta_state_and_events() {
             "event_log_entries": ["The player revealed abnormal mana during guild registration."]
         }
     }"#;
-    let ctx = postgres_test_context(mock_provider([raw.to_string()]))
+    let mut config = shared::AppConfig::default();
+    config.storage.backend = shared::StorageBackend::Postgres;
+    config.admin.enabled = true;
+    config.admin.token = Some(ADMIN_TOKEN.into());
+    let ctx = postgres_test_context_with_config(mock_provider([raw.to_string()]), config)
         .await
         .expect("test context");
     let scenario = sample_scenario();
@@ -473,7 +480,14 @@ async fn dead_npc_attitude_change_returns_422() {
             "event_log_entries": []
         }
     }"#;
-    let ctx = postgres_test_context(mock_provider([kill_turn.to_string(), invalid_turn.to_string()]))
+    let mut config = shared::AppConfig::default();
+    config.storage.backend = shared::StorageBackend::Postgres;
+    config.admin.enabled = true;
+    config.admin.token = Some(ADMIN_TOKEN.into());
+    let ctx = postgres_test_context_with_config(
+        mock_provider([kill_turn.to_string(), invalid_turn.to_string()]),
+        config,
+    )
         .await
         .expect("test context");
     let scenario = sample_scenario();
@@ -500,10 +514,11 @@ async fn dead_npc_attitude_change_returns_422() {
 
     // Verify examiner is now dead in world state.
     let world_state: WorldState = {
-        let (_, body) = send_empty(
+        let (_, body) = send_empty_with_bearer(
             &ctx.router,
             "GET",
             &format!("/admin/sessions/{}/export/raw", session.id),
+            ADMIN_TOKEN,
         )
         .await;
         let v: Value = json_body(&body);
@@ -587,10 +602,11 @@ async fn debug_turn_returns_applied_delta() {
     .await;
     let session: persistence::SessionRecord = json_body(&session_body);
 
-    let (status, body) = send_json(
+    let (status, body) = send_json_with_bearer(
         &ctx.router,
         "POST",
         &format!("/admin/sessions/{}/turn/debug", session.id),
+        ADMIN_TOKEN,
         json!({ "input": "I greet the examiner.", "mode": "dialogue" }),
     )
     .await;
@@ -783,5 +799,138 @@ async fn turn_response_and_export_do_not_leak_raw_provider_output() {
         "export response must not contain raw_provider_output field"
     );
 
+    ctx.cleanup().await;
+}
+
+#[tokio::test]
+#[ignore = "requires docker daemon via testcontainers"]
+async fn raw_provider_output_remains_null_when_storage_disabled() {
+    let raw_turn = r#"{
+        "player_response": "The examiner nods cautiously.",
+        "world_state_delta": {
+            "facts_to_add": [],
+            "npc_changes": [],
+            "faction_changes": [],
+            "quest_changes": [],
+            "clock_changes": [],
+            "relationship_changes": [],
+            "location_change": null,
+            "event_log_entries": []
+        }
+    }"#;
+    let ctx = postgres_test_context(mock_provider([raw_turn.to_string()]))
+        .await
+        .expect("test context");
+    let scenario = sample_scenario();
+
+    send_json(
+        &ctx.router,
+        "POST",
+        "/scenarios",
+        serde_json::to_value(&scenario).unwrap(),
+    )
+    .await;
+    let (_, session_body) = send_json(
+        &ctx.router,
+        "POST",
+        "/sessions",
+        json!({ "scenario_id": scenario.id, "title": "Raw Output Disabled" }),
+    )
+    .await;
+    let session: persistence::SessionRecord = json_body(&session_body);
+
+    let (status, _) = send_json(
+        &ctx.router,
+        "POST",
+        &format!("/sessions/{}/turn", session.id),
+        json!({ "input": "I greet the examiner.", "mode": "dialogue" }),
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+
+    let row = sqlx::query(
+        "SELECT raw_provider_output FROM messages
+         WHERE session_id = $1 AND role = 'Assistant'
+         ORDER BY created_at DESC
+         LIMIT 1",
+    )
+    .bind(session.id)
+    .fetch_one(&ctx.pool)
+    .await
+    .expect("assistant message row");
+
+    let stored = row
+        .try_get::<Option<sqlx::types::Json<serde_json::Value>>, _>("raw_provider_output")
+        .expect("raw provider output column");
+    assert_eq!(stored, None);
+    ctx.cleanup().await;
+}
+
+#[tokio::test]
+#[ignore = "requires docker daemon via testcontainers"]
+async fn raw_provider_output_is_persisted_when_storage_enabled() {
+    let raw_turn = r#"{
+        "player_response": "The examiner nods cautiously.",
+        "world_state_delta": {
+            "facts_to_add": [],
+            "npc_changes": [],
+            "faction_changes": [],
+            "quest_changes": [],
+            "clock_changes": [],
+            "relationship_changes": [],
+            "location_change": null,
+            "event_log_entries": []
+        }
+    }"#;
+    let mut config = shared::AppConfig::default();
+    config.storage.backend = shared::StorageBackend::Postgres;
+    config.debug.store_raw_provider_output = true;
+    let ctx = postgres_test_context_with_config(mock_provider([raw_turn.to_string()]), config)
+        .await
+        .expect("test context");
+    let scenario = sample_scenario();
+
+    send_json(
+        &ctx.router,
+        "POST",
+        "/scenarios",
+        serde_json::to_value(&scenario).unwrap(),
+    )
+    .await;
+    let (_, session_body) = send_json(
+        &ctx.router,
+        "POST",
+        "/sessions",
+        json!({ "scenario_id": scenario.id, "title": "Raw Output Enabled" }),
+    )
+    .await;
+    let session: persistence::SessionRecord = json_body(&session_body);
+
+    let (status, _) = send_json(
+        &ctx.router,
+        "POST",
+        &format!("/sessions/{}/turn", session.id),
+        json!({ "input": "I greet the examiner.", "mode": "dialogue" }),
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+
+    let row = sqlx::query(
+        "SELECT raw_provider_output FROM messages
+         WHERE session_id = $1 AND role = 'Assistant'
+         ORDER BY created_at DESC
+         LIMIT 1",
+    )
+    .bind(session.id)
+    .fetch_one(&ctx.pool)
+    .await
+    .expect("assistant message row");
+
+    let stored = row
+        .try_get::<Option<sqlx::types::Json<serde_json::Value>>, _>("raw_provider_output")
+        .expect("raw provider output column")
+        .expect("raw output should be stored")
+        .0;
+    assert_eq!(stored, serde_json::Value::String(raw_turn.to_string()));
     ctx.cleanup().await;
 }

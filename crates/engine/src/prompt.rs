@@ -694,6 +694,7 @@ mod tests {
                 current: 2,
                 max: 6,
                 consequence: "The guild seals the hall".into(),
+                visible_to_player: true,
             }],
             player_known_facts: vec![Fact {
                 id: "known-1".into(),
@@ -744,6 +745,23 @@ mod tests {
             ],
             mode,
         }
+    }
+
+    fn snapshot_context(
+        style: domain::SceneReasoningStyle,
+        priorities: &[&str],
+        avoid: &[&str],
+        visible_response_shape: &str,
+        mode: Option<TurnMode>,
+    ) -> crate::AgentContext {
+        let mut context = rich_context(mode);
+        context.scene_directive = crate::ReasoningStyleDirective {
+            style,
+            priorities: priorities.iter().map(|value| (*value).to_owned()).collect(),
+            avoid: avoid.iter().map(|value| (*value).to_owned()).collect(),
+            visible_response_shape: visible_response_shape.into(),
+        };
+        context
     }
 
     #[test]
@@ -817,5 +835,100 @@ mod tests {
         assert!(user.contains("The guildhall panic will expose the hidden ruin"));
         assert!(user.contains("if the panic clock reaches 4"));
         assert!(!user.contains("sapphire ledger"));
+    }
+
+    #[test]
+    fn dialogue_prompt_matches_fixture() {
+        let request = BasicPromptBuilder.build_non_streaming_prompt(
+            &snapshot_context(
+                domain::SceneReasoningStyle::CharacterDialogue,
+                &["let the speaker's tone carry the turn", "keep subtext visible"],
+                &["dry exposition"],
+                "in-world dialogue with immediate interpersonal movement",
+                Some(TurnMode::Dialogue),
+            ),
+            "I ask Seraphyne what she truly fears.",
+        );
+
+        assert_eq!(
+            user_message_content(&request),
+            include_str!("prompt_fixtures/dialogue_user_prompt.txt").trim_end()
+        );
+    }
+
+    #[test]
+    fn political_prompt_matches_fixture() {
+        let request = BasicPromptBuilder.build_non_streaming_prompt(
+            &snapshot_context(
+                domain::SceneReasoningStyle::PoliticalNegotiation,
+                &["track leverage", "show visible consequence"],
+                &["generic exposition"],
+                "immersive dialogue plus visible social consequence",
+                Some(TurnMode::Action),
+            ),
+            "I negotiate with the guild to stop the panic clock.",
+        );
+
+        assert_eq!(
+            user_message_content(&request),
+            include_str!("prompt_fixtures/political_user_prompt.txt").trim_end()
+        );
+    }
+
+    #[test]
+    fn combat_prompt_matches_fixture() {
+        let request = BasicPromptBuilder.build_non_streaming_prompt(
+            &snapshot_context(
+                domain::SceneReasoningStyle::TacticalCombat,
+                &["track initiative pressure", "make costs visible"],
+                &["static blow-by-blow"],
+                "kinetic action with concrete consequences",
+                Some(TurnMode::Action),
+            ),
+            "I lunge across the guildhall and strike before the panic spreads.",
+        );
+
+        assert_eq!(
+            user_message_content(&request),
+            include_str!("prompt_fixtures/combat_user_prompt.txt").trim_end()
+        );
+    }
+
+    #[test]
+    fn mystery_prompt_matches_fixture() {
+        let request = BasicPromptBuilder.build_non_streaming_prompt(
+            &snapshot_context(
+                domain::SceneReasoningStyle::MysteryInvestigation,
+                &["surface evidence carefully", "reward observation"],
+                &["premature certainty"],
+                "observational narration with discoverable leads",
+                Some(TurnMode::Action),
+            ),
+            "I examine the shattered crystal stand for clues.",
+        );
+
+        assert_eq!(
+            user_message_content(&request),
+            include_str!("prompt_fixtures/mystery_user_prompt.txt").trim_end()
+        );
+    }
+
+    #[test]
+    fn rules_prompt_matches_fixture() {
+        let request = BasicPromptBuilder.build_non_streaming_prompt(
+            &snapshot_context(
+                domain::SceneReasoningStyle::RulesAdjudication,
+                &["be explicit about mechanics", "stay concise"],
+                &["vague rulings"],
+                "clear adjudication with direct outcome language",
+                Some(TurnMode::Direct),
+            ),
+            "What rule governs stabilizing the panic clock with a divine ability?",
+        );
+
+        assert_eq!(
+            user_message_content(&request),
+            include_str!("prompt_fixtures/rules_user_prompt.txt").trim_end()
+        );
     }
 }

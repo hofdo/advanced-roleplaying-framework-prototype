@@ -1,6 +1,12 @@
+use futures::StreamExt;
 use providers::{LlmMessage, LlmMessageRole, LlmProvider, LlmRequest, ProviderCapabilities, ProviderError};
 use providers::OpenAiCompatibleProvider;
 use serde_json::json;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpListener,
+    time::{sleep, Duration},
+};
 use wiremock::{MockServer, Mock, ResponseTemplate};
 use wiremock::matchers::{method, path};
 
@@ -127,4 +133,41 @@ async fn missing_choices_field_returns_malformed_error() {
     let result = provider.generate(minimal_request()).await;
 
     assert!(matches!(result, Err(ProviderError::MalformedResponse(_))));
+}
+
+#[tokio::test]
+async fn stream_idle_timeout_returns_distinct_error() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+    let address = listener.local_addr().expect("local addr");
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accept");
+        let mut request_buffer = vec![0_u8; 4096];
+        let _ = socket.read(&mut request_buffer).await;
+        socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n",
+            )
+            .await
+            .expect("write headers");
+        sleep(Duration::from_millis(200)).await;
+    });
+
+    let provider = OpenAiCompatibleProvider::new(
+        "test",
+        format!("http://{address}"),
+        None,
+        "gpt-4o-mini",
+        ProviderCapabilities {
+            supports_streaming: true,
+            request_timeout_seconds: 5,
+            stream_idle_timeout_seconds: 0,
+            ..ProviderCapabilities::default()
+        },
+    )
+    .expect("provider");
+
+    let mut stream = provider.stream(minimal_request()).await.expect("stream created");
+    let result = stream.next().await.expect("stream item");
+
+    assert!(matches!(result, Err(ProviderError::StreamIdleTimeout)));
 }

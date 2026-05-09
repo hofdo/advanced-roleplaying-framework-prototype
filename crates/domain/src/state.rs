@@ -102,6 +102,8 @@ pub struct ClockState {
     pub current: u8,
     pub max: u8,
     pub consequence: String,
+    #[serde(default = "default_visible_to_player")]
+    pub visible_to_player: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -146,14 +148,48 @@ pub enum TurnMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct WorldStateDelta {
+    #[serde(default)]
+    pub scene_change: Option<SceneChange>,
+    #[serde(default)]
+    pub active_speaker_change: Option<ActiveSpeakerChange>,
+    #[serde(default)]
     pub facts_to_add: Vec<FactToAdd>,
+    #[serde(default)]
     pub npc_changes: Vec<NpcChange>,
+    #[serde(default)]
     pub faction_changes: Vec<FactionChange>,
+    #[serde(default)]
     pub quest_changes: Vec<QuestChange>,
+    #[serde(default)]
     pub clock_changes: Vec<ClockChange>,
+    #[serde(default)]
     pub relationship_changes: Vec<RelationshipChange>,
+    #[serde(default)]
+    pub inventory_changes: Vec<InventoryChange>,
+    #[serde(default)]
     pub location_change: Option<LocationChange>,
+    #[serde(default)]
+    pub summary_update: Option<SummaryUpdate>,
+    #[serde(default)]
     pub event_log_entries: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SceneChange {
+    pub scene: Option<String>,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ActiveSpeakerChange {
+    pub speaker_id: Option<EntityKey>,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SummaryUpdate {
+    pub summary: Option<String>,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -193,6 +229,11 @@ pub enum NpcChange {
         location_id: EntityKey,
         reason: String,
     },
+    NoteAdded {
+        npc_id: EntityKey,
+        note: String,
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -208,6 +249,16 @@ pub enum FactionChange {
         goal: String,
         reason: String,
     },
+    PublicNoteAdded {
+        faction_id: EntityKey,
+        note: String,
+        reason: String,
+    },
+    HiddenNoteAdded {
+        faction_id: EntityKey,
+        note: String,
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -221,6 +272,11 @@ pub enum ClockChange {
     SetValue {
         clock_id: EntityKey,
         value: u8,
+        reason: String,
+    },
+    VisibilityChanged {
+        clock_id: EntityKey,
+        visible_to_player: bool,
         reason: String,
     },
 }
@@ -256,6 +312,20 @@ pub enum RelationshipChange {
         attitude_delta: i32,
         reason: String,
     },
+    NoteAdded {
+        source_id: EntityKey,
+        target_id: EntityKey,
+        note: String,
+        reason: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum InventoryChange {
+    Added { item: InventoryItem, reason: String },
+    Removed { item_id: EntityKey, reason: String },
+    Updated { item: InventoryItem, reason: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

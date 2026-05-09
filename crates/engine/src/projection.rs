@@ -82,6 +82,7 @@ impl FrontendStateProjector for BasicFrontendStateProjector {
         let visible_clocks = state
             .clocks
             .iter()
+            .filter(|clock| viewer.is_admin || clock.visible_to_player)
             .map(|clock| VisibleClock {
                 id: clock.id.clone(),
                 title: clock.title.clone(),
@@ -122,29 +123,44 @@ impl FrontendStateProjector for BasicFrontendStateProjector {
     ) -> FrontendStatePatch {
         FrontendStatePatch {
             state_version: state.version,
-            changed_entities: changed_entities(delta),
+            changed_entities: changed_entities(state, delta),
             visible_state: Some(self.project(scenario, state, viewer)),
         }
     }
 }
 
-pub fn changed_entities(delta: &ValidatedWorldStateDelta) -> Vec<EntityRef> {
+pub fn changed_entities(state: &WorldState, delta: &ValidatedWorldStateDelta) -> Vec<EntityRef> {
     let delta = &delta.0;
     let mut refs = Vec::new();
+
+    for fact in state
+        .facts
+        .iter()
+        .rev()
+        .take(delta.facts_to_add.len())
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+    {
+        push_unique(&mut refs, "fact", &fact.id);
+    }
 
     for change in &delta.npc_changes {
         let id = match change {
             domain::NpcChange::AttitudeChanged { npc_id, .. }
             | domain::NpcChange::KnowledgeAdded { npc_id, .. }
             | domain::NpcChange::StatusChanged { npc_id, .. }
-            | domain::NpcChange::LocationChanged { npc_id, .. } => npc_id,
+            | domain::NpcChange::LocationChanged { npc_id, .. }
+            | domain::NpcChange::NoteAdded { npc_id, .. } => npc_id,
         };
         push_unique(&mut refs, "npc", id);
     }
     for change in &delta.faction_changes {
         let id = match change {
             domain::FactionChange::StandingChanged { faction_id, .. }
-            | domain::FactionChange::GoalRevealed { faction_id, .. } => faction_id,
+            | domain::FactionChange::GoalRevealed { faction_id, .. }
+            | domain::FactionChange::PublicNoteAdded { faction_id, .. }
+            | domain::FactionChange::HiddenNoteAdded { faction_id, .. } => faction_id,
         };
         push_unique(&mut refs, "faction", id);
     }
@@ -160,9 +176,25 @@ pub fn changed_entities(delta: &ValidatedWorldStateDelta) -> Vec<EntityRef> {
     for change in &delta.clock_changes {
         let id = match change {
             domain::ClockChange::Advanced { clock_id, .. }
-            | domain::ClockChange::SetValue { clock_id, .. } => clock_id,
+            | domain::ClockChange::SetValue { clock_id, .. }
+            | domain::ClockChange::VisibilityChanged { clock_id, .. } => clock_id,
         };
         push_unique(&mut refs, "clock", id);
+    }
+    for change in &delta.relationship_changes {
+        let id = match change {
+            domain::RelationshipChange::Changed {
+                source_id,
+                target_id,
+                ..
+            }
+            | domain::RelationshipChange::NoteAdded {
+                source_id,
+                target_id,
+                ..
+            } => format!("{source_id}->{target_id}"),
+        };
+        push_unique(&mut refs, "relationship", &id);
     }
     if let Some(location) = &delta.location_change {
         push_unique(&mut refs, "location", &location.location_id);
@@ -355,5 +387,134 @@ mod tests {
         );
         assert_eq!(projected.visible_npcs[0].id, "ally");
         assert_eq!(projected.visible_npcs[0].status, NpcStatus::Missing);
+    }
+
+    #[test]
+    fn hidden_clocks_are_filtered_for_players_but_visible_to_admins() {
+        let scenario = Scenario {
+            id: Uuid::new_v4(),
+            title: "Test".into(),
+            scenario_type: ScenarioType::Adventure,
+            setting: "test".into(),
+            tone: "neutral".into(),
+            rules: vec![],
+            locations: vec![],
+            factions: vec![],
+            npcs: vec![],
+            quests: vec![],
+            secrets: vec![],
+            clocks: vec![],
+        };
+        let state = WorldState {
+            session_id: Uuid::new_v4(),
+            scenario_id: scenario.id,
+            version: 1,
+            current_location_id: None,
+            current_scene: None,
+            active_speaker_id: None,
+            facts: vec![],
+            npcs: vec![],
+            factions: vec![],
+            quests: vec![],
+            clocks: vec![
+                ClockState {
+                    id: "public".into(),
+                    title: "Public Clock".into(),
+                    current: 1,
+                    max: 4,
+                    consequence: "Everyone knows.".into(),
+                    visible_to_player: true,
+                },
+                ClockState {
+                    id: "hidden".into(),
+                    title: "Hidden Clock".into(),
+                    current: 2,
+                    max: 6,
+                    consequence: "GM only.".into(),
+                    visible_to_player: false,
+                },
+            ],
+            relationships: vec![],
+            inventory: vec![],
+            summary: None,
+            recent_events: vec![],
+        };
+
+        let player =
+            BasicFrontendStateProjector.project(&scenario, &state, &ViewerContext::player());
+        let admin = BasicFrontendStateProjector.project(
+            &scenario,
+            &state,
+            &ViewerContext {
+                include_debug_state: true,
+                is_admin: true,
+            },
+        );
+
+        assert_eq!(player.visible_clocks.len(), 1);
+        assert_eq!(player.visible_clocks[0].id, "public");
+        assert_eq!(admin.visible_clocks.len(), 2);
+    }
+
+    #[test]
+    fn changed_entities_include_added_facts_and_relationships() {
+        let state = WorldState {
+            session_id: Uuid::new_v4(),
+            scenario_id: Uuid::new_v4(),
+            version: 2,
+            current_location_id: None,
+            current_scene: None,
+            active_speaker_id: None,
+            facts: vec![Fact {
+                id: "fact-2-1".into(),
+                text: "The ritual knife is cursed".into(),
+                visibility: FactVisibility::PlayerKnown,
+                known_by: vec![],
+                source: FactSource::Turn,
+                reveal_conditions: vec![],
+                related_secret_ids: vec![],
+                reveal_condition_satisfied: None,
+            }],
+            npcs: vec![],
+            factions: vec![],
+            quests: vec![],
+            clocks: vec![],
+            relationships: vec![],
+            inventory: vec![],
+            summary: None,
+            recent_events: vec![],
+        };
+        let delta = ValidatedWorldStateDelta(WorldStateDelta {
+            facts_to_add: vec![FactToAdd {
+                text: "The ritual knife is cursed".into(),
+                visibility: FactVisibility::PlayerKnown,
+                known_by: vec![],
+                reveal_conditions: vec![],
+                reason: "The player inspected it".into(),
+                related_secret_ids: vec![],
+                reveal_condition_satisfied: None,
+            }],
+            relationship_changes: vec![RelationshipChange::NoteAdded {
+                source_id: "npc-1".into(),
+                target_id: "npc-2".into(),
+                note: "Tension remains high".into(),
+                reason: "The argument left a mark".into(),
+            }],
+            ..WorldStateDelta::default()
+        });
+
+        let refs = changed_entities(&state, &delta);
+
+        assert!(
+            refs.iter()
+                .any(|entity| entity.entity_type == "fact" && entity.id == "fact-2-1"),
+            "facts_to_add should produce a fact entity ref"
+        );
+        assert!(
+            refs.iter().any(|entity| {
+                entity.entity_type == "relationship" && entity.id == "npc-1->npc-2"
+            }),
+            "relationship note changes should produce a relationship entity ref"
+        );
     }
 }

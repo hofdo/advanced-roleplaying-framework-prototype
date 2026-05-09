@@ -446,7 +446,7 @@ impl TurnStateStore for PgPersistence {
         sqlx::query(
             "INSERT INTO messages
              (id, session_id, role, speaker_id, content, scene_type, prompt_template_version, raw_provider_output)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, NULL)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
         .bind(user_message.id)
         .bind(user_message.session_id)
@@ -455,6 +455,7 @@ impl TurnStateStore for PgPersistence {
         .bind(&user_message.content)
         .bind(user_message.scene_type.map(|style| format!("{style:?}")))
         .bind(&user_message.prompt_template_version)
+        .bind(user_message.raw_provider_output.as_ref().map(sqlx::types::Json))
         .execute(&mut *tx)
         .await
         .map_err(|error| TurnPipelineError::Store(error.to_string()))?;
@@ -462,7 +463,7 @@ impl TurnStateStore for PgPersistence {
         sqlx::query(
             "INSERT INTO messages
              (id, session_id, role, speaker_id, content, scene_type, prompt_template_version, raw_provider_output)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, NULL)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
         .bind(assistant_message.id)
         .bind(assistant_message.session_id)
@@ -471,6 +472,7 @@ impl TurnStateStore for PgPersistence {
         .bind(&assistant_message.content)
         .bind(assistant_message.scene_type.map(|style| format!("{style:?}")))
         .bind(&assistant_message.prompt_template_version)
+        .bind(assistant_message.raw_provider_output.as_ref().map(sqlx::types::Json))
         .execute(&mut *tx)
         .await
         .map_err(|error| TurnPipelineError::Store(error.to_string()))?;
@@ -531,6 +533,17 @@ impl TurnStateStore for PgPersistence {
         description: String,
     ) -> Result<(), TurnPipelineError> {
         <Self as EventRepository>::append(self, session_id, "turn_error", &description)
+            .await
+            .map_err(repo_to_pipeline)
+    }
+
+    async fn persist_pipeline_event(
+        &self,
+        session_id: SessionId,
+        event_type: &'static str,
+        description: String,
+    ) -> Result<(), TurnPipelineError> {
+        <Self as EventRepository>::append(self, session_id, event_type, &description)
             .await
             .map_err(repo_to_pipeline)
     }

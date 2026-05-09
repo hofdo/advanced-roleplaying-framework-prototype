@@ -9,6 +9,7 @@ use reqwest::{Client, StatusCode};
 use serde::Serialize;
 use serde_json::Value;
 use std::time::Duration;
+use tokio::time::timeout;
 
 #[derive(Debug, Clone)]
 pub struct OpenAiCompatibleProvider {
@@ -132,11 +133,11 @@ impl OpenAiCompatibleProvider {
 #[async_trait]
 impl LlmProvider for OpenAiCompatibleProvider {
     async fn health(&self) -> Result<ProviderHealth, ProviderError> {
-        let ok = !self.base_url.is_empty() && !self.name.is_empty();
+        let ok = !self.base_url.is_empty() && !self.name.is_empty() && !self.model.is_empty();
         let message = if ok {
             "provider configured".into()
         } else {
-            "provider not configured: base_url or name is empty".into()
+            "provider not configured: name, base_url, or model is empty".into()
         };
         Ok(ProviderHealth {
             name: self.name.clone(),
@@ -205,9 +206,18 @@ impl LlmProvider for OpenAiCompatibleProvider {
             match self.try_stream_response(&request).await {
                 Ok(response) => {
                     let stream = response.bytes_stream();
+                    let idle_timeout = Duration::from_secs(
+                        self.capabilities.stream_idle_timeout_seconds,
+                    );
                     return Ok(Box::pin(try_stream! {
                         futures::pin_mut!(stream);
-                        while let Some(chunk) = stream.next().await {
+                        loop {
+                            let chunk = timeout(idle_timeout, stream.next())
+                                .await
+                                .map_err(|_| ProviderError::StreamIdleTimeout)?;
+                            let Some(chunk) = chunk else {
+                                break;
+                            };
                             let bytes = chunk.map_err(|error| map_reqwest_error(&error))?;
                             let text = String::from_utf8_lossy(&bytes);
                             for line in text.lines() {
@@ -305,6 +315,22 @@ mod tests {
             "",
             None,
             "local-model",
+            ProviderCapabilities::default(),
+        )
+        .expect("provider");
+
+        let health = provider.health().await.expect("health");
+
+        assert!(!health.ok);
+    }
+
+    #[tokio::test]
+    async fn health_returns_ok_false_when_model_empty() {
+        let provider = OpenAiCompatibleProvider::new(
+            "local",
+            "http://localhost:8081/v1/",
+            None,
+            "",
             ProviderCapabilities::default(),
         )
         .expect("provider");
