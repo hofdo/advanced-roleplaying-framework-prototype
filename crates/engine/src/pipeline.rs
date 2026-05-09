@@ -639,6 +639,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn persisted_assistant_message_records_prompt_template_version() {
+        let session_id = Uuid::new_v4();
+        let scenario = scenario();
+        let store = Arc::new(MemoryTurnStore::new(LoadedTurnState {
+            world_state: world_state(session_id, scenario.id),
+            scenario,
+            recent_messages: vec![],
+        }));
+        let raw = r#"{
+            "player_response": "The guildhall falls silent.",
+            "world_state_delta": {
+                "facts_to_add": [],
+                "npc_changes": [],
+                "faction_changes": [],
+                "quest_changes": [],
+                "clock_changes": [],
+                "relationship_changes": [],
+                "location_change": null,
+                "event_log_entries": []
+            }
+        }"#;
+        let provider = Arc::new(MockProvider::new("mock", [raw.into()]));
+        let pipeline = DefaultTurnPipeline::new(provider, Arc::clone(&store));
+
+        pipeline
+            .process_turn(TurnRequestInput {
+                session_id,
+                input: "I wait for the room to settle.".into(),
+                mode: Some(TurnMode::Action),
+                viewer: ViewerContext::player(),
+            })
+            .await
+            .expect("turn response");
+
+        let persisted_messages = store
+            .persisted_messages
+            .lock()
+            .expect("messages mutex");
+        let assistant_message = persisted_messages
+            .iter()
+            .find(|message| message.role == MessageRole::Assistant)
+            .expect("assistant message");
+        assert_eq!(
+            assistant_message.prompt_template_version.as_deref(),
+            Some(crate::PROMPT_TEMPLATE_VERSION)
+        );
+    }
+
+    #[tokio::test]
     async fn overpowered_player_fixture_preserves_external_stakes_and_hides_secrets() {
         let session_id = Uuid::new_v4();
         let mut scenario = scenario();
