@@ -16,7 +16,7 @@ pub trait LlmProvider: Send + Sync {
     async fn list_models(&self) -> Result<Vec<ProviderModel>, ProviderError> {
         Err(ProviderError::Unsupported("list_models".into()))
     }
-    async fn take_stream_metadata(&self) -> Option<StreamMetadata> {
+    fn take_stream_metadata(&self) -> Option<StreamMetadata> {
         None
     }
 }
@@ -127,14 +127,15 @@ pub struct TokenUsage {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ModelPricing {
-    pub prompt_per_token: f64,
-    pub completion_per_token: f64,
+    pub prompt_usd_per_token: f64,
+    pub completion_usd_per_token: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProviderModel {
     pub id: String,
-    pub name: Option<String>,
+    #[serde(default)]
+    pub name: String,
     pub context_length: Option<u32>,
     pub pricing: Option<ModelPricing>,
 }

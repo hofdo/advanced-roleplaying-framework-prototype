@@ -316,7 +316,7 @@ impl LlmProvider for LlamaCppProvider {
                     .and_then(Value::as_str)
                     .map(|id| ProviderModel {
                         id: id.to_owned(),
-                        name: None,
+                        name: item.get("id").and_then(Value::as_str).unwrap_or("").to_owned(),
                         context_length: None,
                         pricing: None,
                     })
