@@ -114,11 +114,76 @@ edition: 2024
 license: Apache-2.0
 ```
 
+## LLM Providers
+
+Three provider types are supported, selected via `LLM_PROVIDER_TYPE`:
+
+| `provider_type` | Description |
+|---|---|
+| `openai_compatible` (default) | Generic OpenAI-compatible HTTP endpoint |
+| `llama_cpp` | Local `llama-server` — real `/health` + `/props` probes, control-token filtering |
+| `openrouter` | OpenRouter cloud — attribution headers, provider routing, model catalog, usage/cost capture |
+
+### llama.cpp (local)
+
+```bash
+export LLM_PROVIDER_TYPE=llama_cpp
+export LLM_BASE_URL=http://localhost:8081/v1
+export LLM_MODEL=your-model-name
+cargo run -p api
+```
+
+Start `llama-server` separately:
+```bash
+llama-server -m /path/to/model.gguf --port 8081
+```
+
+### OpenRouter (cloud)
+
+```bash
+export LLM_PROVIDER_TYPE=openrouter
+export LLM_BASE_URL=https://openrouter.ai/api/v1
+export LLM_MODEL=openai/gpt-4o-mini
+export LLM_API_KEY=env:OPENROUTER_API_KEY   # resolves from env at startup
+export LLM_HTTP_REFERER=https://your-app.example.com
+export LLM_X_TITLE=YourAppName
+export OPENROUTER_API_KEY=sk-or-...
+cargo run -p api
+```
+
+Or register via API at runtime:
+```bash
+curl -X POST http://localhost:8080/providers \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "openrouter",
+    "provider_type": "openrouter",
+    "base_url": "https://openrouter.ai/api/v1",
+    "model": "openai/gpt-4o-mini",
+    "api_key_secret_ref": "env:OPENROUTER_API_KEY",
+    "capabilities": {
+      "supports_streaming": true,
+      "supports_model_listing": true,
+      "supports_usage_reporting": true,
+      "supports_cost_reporting": true,
+      "http_referer": "https://your-app.example.com",
+      "x_title": "YourAppName"
+    }
+  }'
+```
+
+### API key secret references
+
+`api_key_secret_ref` (and `LLM_API_KEY`) accept either a plain string or an env-var reference:
+
+- `sk-or-abc123` — used as-is
+- `env:OPENROUTER_API_KEY` — resolved from `$OPENROUTER_API_KEY` at provider construction time; fails loudly if the var is not set
+
 ## Prerequisites
 
 - Rust stable
 - Docker, when using PostgreSQL locally or running Docker-gated tests
-- An OpenAI-compatible LLM endpoint for real model-backed turns
+- An LLM endpoint: local `llama-server`, an OpenAI-compatible server, or an OpenRouter API key
 
 ## Local Setup
 
@@ -216,6 +281,7 @@ Expected shape:
 | `POST` | `/providers` | Register a provider configuration |
 | `GET` | `/providers` | List registered providers |
 | `DELETE` | `/providers/:id` | Remove a provider |
+| `GET` | `/providers/:id/models` | List models available from a registered provider |
 | `GET` | `/providers/health` | Provider configuration health |
 | `GET` | `/providers/readiness` | Live provider readiness |
 
