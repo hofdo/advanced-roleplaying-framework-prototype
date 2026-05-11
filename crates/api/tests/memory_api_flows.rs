@@ -339,6 +339,45 @@ async fn delete_provider_removes_it() {
     assert_eq!(list.as_array().unwrap().len(), 0);
 }
 
+#[tokio::test]
+async fn list_models_returns_501_for_openai_compatible_provider() {
+    let router = memory_test_context(mock_provider(Vec::<String>::new()));
+
+    let (_, create_body) = send_json(
+        &router,
+        "POST",
+        "/providers",
+        json!({
+            "name": "models-test-provider",
+            "provider_type": "openai_compatible",
+            "base_url": "http://localhost:11434",
+            "model": "llama3",
+            "api_key_secret_ref": null,
+            "capabilities": null,
+            "is_default": false
+        }),
+    )
+    .await;
+    let created: Value = json_body(&create_body);
+    let provider_id = created["id"].as_str().unwrap();
+
+    let (status, _) =
+        send_empty(&router, "GET", &format!("/providers/{provider_id}/models")).await;
+
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+}
+
+#[tokio::test]
+async fn list_models_returns_404_for_unknown_provider() {
+    let router = memory_test_context(mock_provider(Vec::<String>::new()));
+    let unknown_id = Uuid::new_v4();
+
+    let (status, _) =
+        send_empty(&router, "GET", &format!("/providers/{unknown_id}/models")).await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
 // ---------------------------------------------------------------------------
 // Session-provider assignment
 // ---------------------------------------------------------------------------

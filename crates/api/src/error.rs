@@ -33,6 +33,13 @@ impl ApiError {
             message: message.into(),
         }
     }
+
+    pub fn status(status: StatusCode, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            message: message.into(),
+        }
+    }
 }
 
 impl From<TurnPipelineError> for ApiError {

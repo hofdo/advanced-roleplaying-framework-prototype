@@ -27,6 +27,7 @@ pub fn app_router(app_state: AppState) -> Router {
         .route("/providers/health", get(provider_health))
         .route("/providers/readiness", get(provider_readiness))
         .route("/providers/:id", delete(delete_provider))
+        .route("/providers/:id/models", get(list_provider_models))
         .route(
             "/sessions/:session_id/provider",
             patch(set_session_provider),
@@ -137,6 +138,24 @@ async fn delete_provider(
     state.store.delete_provider(id).await?;
     state.provider_registry.write().await.remove(&id);
     Ok(Json(DeleteResponse { deleted: true }))
+}
+
+async fn list_provider_models(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<providers::ProviderModel>>, ApiError> {
+    let registry = state.provider_registry.read().await;
+    let provider = registry.get(&id).ok_or_else(ApiError::not_found)?;
+    provider
+        .list_models()
+        .await
+        .map(Json)
+        .map_err(|e| match e {
+            providers::ProviderError::Unsupported(_) => {
+                ApiError::status(StatusCode::NOT_IMPLEMENTED, e.to_string())
+            }
+            other => ApiError::from(engine::TurnPipelineError::from(other)),
+        })
 }
 
 async fn test_provider(
