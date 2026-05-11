@@ -5,6 +5,7 @@ use persistence::{
     ProviderConfigRepository, ProviderRecord, ScenarioRepository, SessionRepository,
     WorldStateRepository,
 };
+use sqlx::Executor;
 use testcontainers_modules::{
     postgres::Postgres,
     testcontainers::{ContainerAsync, runners::AsyncRunner},
@@ -15,18 +16,30 @@ use uuid::Uuid;
 // Setup helper
 // ---------------------------------------------------------------------------
 
-async fn setup() -> (PgPersistence, ContainerAsync<Postgres>) {
-    let container = Postgres::default()
-        .with_db_name("test")
-        .with_user("test")
-        .with_password("test")
-        .start()
+async fn setup() -> (PgPersistence, Option<ContainerAsync<Postgres>>) {
+    let (url, container) = if let Ok(url) = std::env::var("TEST_DATABASE_URL") {
+        (url, None)
+    } else {
+        let container = Postgres::default()
+            .with_db_name("test")
+            .with_user("test")
+            .with_password("test")
+            .start()
+            .await
+            .unwrap();
+        let host = container.get_host().await.unwrap();
+        let port = container.get_host_port_ipv4(5432).await.unwrap();
+        (
+            format!("postgres://test:test@{host}:{port}/test"),
+            Some(container),
+        )
+    };
+    let p = PgPersistence::connect(&url).await.unwrap();
+    p.pool()
+        .execute("DROP SCHEMA IF EXISTS public CASCADE")
         .await
         .unwrap();
-    let host = container.get_host().await.unwrap();
-    let port = container.get_host_port_ipv4(5432).await.unwrap();
-    let url = format!("postgres://test:test@{host}:{port}/test");
-    let p = PgPersistence::connect(&url).await.unwrap();
+    p.pool().execute("CREATE SCHEMA public").await.unwrap();
     p.migrate().await.unwrap();
     (p, container)
 }
@@ -103,7 +116,7 @@ fn sample_provider(name: &str, is_default: bool) -> ProviderRecord {
 // ===========================================================================
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn create_and_get_scenario() {
     let (p, _container) = setup().await;
 
@@ -122,7 +135,7 @@ async fn create_and_get_scenario() {
 }
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn list_scenarios_returns_all() {
     let (p, _container) = setup().await;
 
@@ -138,7 +151,7 @@ async fn list_scenarios_returns_all() {
 }
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn update_scenario_changes_title() {
     let (p, _container) = setup().await;
 
@@ -159,7 +172,7 @@ async fn update_scenario_changes_title() {
 }
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn delete_scenario() {
     let (p, _container) = setup().await;
 
@@ -173,7 +186,7 @@ async fn delete_scenario() {
 }
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn get_unknown_scenario_returns_none() {
     let (p, _container) = setup().await;
 
@@ -186,7 +199,7 @@ async fn get_unknown_scenario_returns_none() {
 // ===========================================================================
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn create_and_get_session() {
     let (p, _container) = setup().await;
 
@@ -208,7 +221,7 @@ async fn create_and_get_session() {
 }
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn list_sessions() {
     let (p, _container) = setup().await;
 
@@ -228,7 +241,7 @@ async fn list_sessions() {
 }
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn delete_session() {
     let (p, _container) = setup().await;
 
@@ -247,7 +260,7 @@ async fn delete_session() {
 }
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn set_provider_on_session() {
     let (p, _container) = setup().await;
 
@@ -259,7 +272,12 @@ async fn set_provider_on_session() {
         .await
         .unwrap();
 
-    let provider_id = Uuid::new_v4();
+    let provider = sample_provider("session-provider", false);
+    let provider_id = provider.id;
+    ProviderConfigRepository::create(&p, provider)
+        .await
+        .unwrap();
+
     let updated = SessionRepository::set_provider(&p, session.id, Some(provider_id))
         .await
         .unwrap();
@@ -275,7 +293,7 @@ async fn set_provider_on_session() {
 }
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn set_provider_unknown_session_returns_not_found() {
     let (p, _container) = setup().await;
 
@@ -292,7 +310,7 @@ async fn set_provider_unknown_session_returns_not_found() {
 // ===========================================================================
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn save_and_get_world_state() {
     let (p, _container) = setup().await;
 
@@ -316,7 +334,7 @@ async fn save_and_get_world_state() {
 }
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn save_second_version_replaces_first() {
     let (p, _container) = setup().await;
 
@@ -345,7 +363,7 @@ async fn save_second_version_replaces_first() {
 }
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn get_unknown_session_world_state_returns_none() {
     let (p, _container) = setup().await;
 
@@ -358,7 +376,7 @@ async fn get_unknown_session_world_state_returns_none() {
 // ===========================================================================
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn append_and_recent_messages() {
     let (p, _container) = setup().await;
 
@@ -379,7 +397,7 @@ async fn append_and_recent_messages() {
 }
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn recent_messages_respects_limit() {
     let (p, _container) = setup().await;
 
@@ -405,7 +423,7 @@ async fn recent_messages_respects_limit() {
 // ===========================================================================
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn append_and_list_events() {
     let (p, _container) = setup().await;
 
@@ -430,7 +448,7 @@ async fn append_and_list_events() {
 }
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn list_events_for_unknown_session_returns_empty() {
     let (p, _container) = setup().await;
 
@@ -443,7 +461,7 @@ async fn list_events_for_unknown_session_returns_empty() {
 // ===========================================================================
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn create_and_get_provider() {
     let (p, _container) = setup().await;
 
@@ -461,7 +479,7 @@ async fn create_and_get_provider() {
 }
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn get_provider_by_name() {
     let (p, _container) = setup().await;
 
@@ -479,7 +497,7 @@ async fn get_provider_by_name() {
 }
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn delete_provider() {
     let (p, _container) = setup().await;
 
@@ -493,7 +511,7 @@ async fn delete_provider() {
 }
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn get_default_returns_is_default_true_provider() {
     let (p, _container) = setup().await;
 
@@ -522,7 +540,7 @@ async fn get_default_returns_is_default_true_provider() {
 // ===========================================================================
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn acquire_lock_on_fresh_session_succeeds() {
     let (p, _container) = setup().await;
 
@@ -539,7 +557,7 @@ async fn acquire_lock_on_fresh_session_succeeds() {
 }
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn second_acquire_returns_already_in_progress() {
     let (p, _container) = setup().await;
 
@@ -563,7 +581,7 @@ async fn second_acquire_returns_already_in_progress() {
 }
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn stale_lock_is_recovered() {
     let (p, _container) = setup().await;
 

@@ -129,15 +129,25 @@ Three provider types are supported, selected via `LLM_PROVIDER_TYPE`:
 ### llama.cpp (local)
 
 ```bash
+bash scripts/start-llm.sh gemma4-uncensored
+
 export LLM_PROVIDER_TYPE=llama_cpp
-export LLM_BASE_URL=http://localhost:8081/v1
+export LLM_BASE_URL=http://localhost:8080/v1
 export LLM_MODEL=your-model-name
 cargo run -p api
 ```
 
-Start `llama-server` separately:
+The helper script starts `llama-server` with a HuggingFace-backed model and defaults to port `8080`.
+If the model is already cached locally, no `HF_TOKEN` is needed. Set `HF_TOKEN` only when the selected model must be fetched from HuggingFace.
+Available model aliases today:
+
+- `gemma4-uncensored`
+- `qwen3-uncensored`
+
+If you prefer to keep the older `8081` local convention, override the script port:
+
 ```bash
-llama-server -m /path/to/model.gguf --port 8081
+LLAMA_PORT=8081 bash scripts/start-llm.sh gemma4-uncensored
 ```
 
 ### OpenRouter (cloud)
@@ -185,6 +195,7 @@ curl -X POST http://localhost:8080/providers \
 
 - Rust stable
 - Docker, when using PostgreSQL locally or running Docker-gated tests
+- `llama-server` installed locally, when using `scripts/start-llm.sh`
 - An LLM endpoint: local `llama-server`, an OpenAI-compatible server, or an OpenRouter API key
 
 ## Local Setup
@@ -204,12 +215,21 @@ password: roleplay
 port: 5432
 ```
 
+### Start the local llama.cpp server
+
+```bash
+bash scripts/start-llm.sh gemma4-uncensored
+```
+
+The script defaults to `http://127.0.0.1:8080/v1`. If the model is already cached locally, no `HF_TOKEN` is needed. If you run the API against it, point `LLM_BASE_URL` there or start the script with `LLAMA_PORT=8081`.
+
 ### Run the API with PostgreSQL
 
 ```bash
 export DATABASE_URL=postgres://roleplay:roleplay@localhost:5432/roleplay
 export ROLEPLAY_STORAGE=postgres
-export LLM_BASE_URL=http://localhost:8081/v1
+export LLM_PROVIDER_TYPE=llama_cpp
+export LLM_BASE_URL=http://localhost:8080/v1
 export LLM_MODEL=local-model
 
 cargo run -p api
@@ -378,6 +398,60 @@ cargo test -p api --test postgres_api_flows -- --ignored
 ```bash
 cargo test -p persistence --test repository_tests -- --ignored
 ```
+
+### Live local stack smoke test
+
+This is the opt-in integration path that runs the API against:
+
+- PostgreSQL started through Docker or testcontainers
+- a real local `llama-server` started by `scripts/start-llm.sh`
+
+It intentionally checks deterministic surfaces only: API health, provider readiness, provider persistence, and model listing. The main turn-flow integration suite stays mock-provider based because real model output is nondeterministic.
+
+Start the local LLM first:
+
+```bash
+bash scripts/start-llm.sh gemma4-uncensored
+```
+
+Then run the smoke test:
+
+```bash
+TEST_LLM_BASE_URL=http://127.0.0.1:8080/v1 \
+TEST_LLM_MODEL=local-model \
+cargo test -p api --test live_llama_postgres_smoke -- --ignored --test-threads=1
+```
+
+Optional overrides:
+
+- `TEST_LLM_PROVIDER_TYPE` defaults to `llama_cpp`
+- `TEST_LLM_API_KEY` is used if your local server requires bearer auth
+
+### One-command local LLM test workflow
+
+This wrapper starts one shared PostgreSQL container through `docker compose`, starts the local `llama-server`, runs the normal workspace suite, then runs the ignored Postgres-backed integration suites and the live local-LLM smoke test, and finally shuts the local LLM and shared Postgres back down again.
+
+The script prints explicit phase markers so it is easy to distinguish:
+
+- the normal workspace test pass, where `#[ignore]` tests are intentionally skipped
+- the later ignored integration passes, where those Postgres-backed tests are actually executed
+
+The shared Postgres-backed integration phases run with `--test-threads=1` so each test can reset the shared schema safely before it runs.
+
+```bash
+bash scripts/test-with-local-llm.sh gemma4-uncensored
+```
+
+Useful overrides:
+
+- `HF_TOKEN=...` when the selected model must be fetched from HuggingFace
+- `LLAMA_PORT=8081` to move the local LLM off the default port
+- `TEST_LLM_MODEL=...` to label the smoke test provider with a specific model name
+- `TEST_LLM_PROVIDER_TYPE=llama_cpp` to keep or override the live smoke provider type
+- `TEST_DATABASE_URL=postgres://...` to point the shared test phases at a different Postgres database
+- `KEEP_TEST_POSTGRES=1` to leave the compose-managed Postgres container running after the script exits
+
+The wrapper fails fast if `llama-server` is missing, Docker is unavailable, the shared Postgres container never becomes healthy, or the requested LLM port is already occupied.
 
 ### Run everything
 

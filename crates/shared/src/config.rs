@@ -97,7 +97,7 @@ impl Default for AppConfig {
                 default: ProviderConfig {
                     name: "local-llama".into(),
                     provider_type: "openai_compatible".into(),
-                    base_url: "http://localhost:8081/v1".into(),
+                    base_url: "http://localhost:8080/v1".into(),
                     api_key: None,
                     model: "local-model".into(),
                     supports_streaming: true,
@@ -225,7 +225,7 @@ mod tests {
         assert_eq!(config.server.port, 8080);
         assert_eq!(config.storage.backend, StorageBackend::Postgres);
         assert!(config.storage.migrate_on_startup);
-        assert_eq!(config.provider.default.base_url, "http://localhost:8081/v1");
+        assert_eq!(config.provider.default.base_url, "http://localhost:8080/v1");
         assert!(!config.admin.enabled);
         assert_eq!(config.admin.token, None);
         assert!(!config.debug.store_raw_provider_output);

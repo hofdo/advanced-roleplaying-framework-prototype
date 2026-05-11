@@ -46,4 +46,5 @@ During a turn, persistence may be responsible for:
 cargo test -p persistence
 cargo test -p persistence --test repository_tests -- --ignored
 DATABASE_URL=postgres://roleplay:roleplay@localhost:5432/roleplay cargo test -p persistence --test repository_tests -- --ignored
+TEST_DATABASE_URL=postgres://roleplay:roleplay@localhost:5432/roleplay cargo test -p persistence --test repository_tests -- --ignored --test-threads=1
 ```

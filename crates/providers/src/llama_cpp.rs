@@ -50,7 +50,7 @@ impl LlamaCppProvider {
     }
 
     /// Strip `/v1` suffix from `base_url` to get the server root.
-    /// E.g. `http://localhost:8081/v1` → `http://localhost:8081`.
+    /// E.g. `http://localhost:8080/v1` → `http://localhost:8080`.
     fn root_url(&self) -> String {
         if let Some(root) = self.base_url.strip_suffix("/v1") {
             root.to_owned()
