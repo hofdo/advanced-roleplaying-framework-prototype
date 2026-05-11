@@ -13,7 +13,10 @@ use persistence::{
     ProviderRecord, RepoError, ScenarioRepository, SessionRecord, SessionRepository,
     WorldStateRepository,
 };
-use providers::{LlmProvider, OpenAiCompatibleProvider, ProviderCapabilities};
+use providers::{
+    LlmProvider, LlamaCppProvider, OpenAiCompatibleProvider, OpenRouterExtras,
+    OpenRouterProvider, ProviderCapabilities, resolve_secret,
+};
 use shared::{AppConfig, StorageBackend};
 use std::{
     collections::HashMap,
@@ -34,23 +37,7 @@ pub struct AppState {
 impl AppState {
     pub async fn new(config: AppConfig) -> anyhow::Result<Self> {
         config.validate()?;
-        let provider_config = &config.provider.default;
-        let provider = Arc::new(OpenAiCompatibleProvider::new(
-            provider_config.name.clone(),
-            provider_config.base_url.clone(),
-            provider_config.api_key.clone(),
-            provider_config.model.clone(),
-            ProviderCapabilities {
-                supports_streaming: provider_config.supports_streaming,
-                supports_json_mode: provider_config.supports_json_mode,
-                max_context_tokens: provider_config.max_context_tokens,
-                request_timeout_seconds: provider_config.request_timeout_seconds,
-                stream_idle_timeout_seconds: provider_config.stream_idle_timeout_seconds,
-                max_retries: provider_config.max_retries,
-                ..ProviderCapabilities::default()
-            },
-        )
-        .map_err(|error| anyhow::anyhow!(error.to_string()))?);
+        let provider = build_provider_from_config(&config.provider.default)?;
 
         let (store, turn_lock, provider_registry): (
             Arc<dyn ApplicationStore>,
@@ -99,23 +86,7 @@ impl AppState {
     pub fn new_memory(config: AppConfig) -> anyhow::Result<Self> {
         config.validate()?;
         let store_raw_provider_output = config.debug.store_raw_provider_output;
-        let provider_config = &config.provider.default;
-        let provider = Arc::new(OpenAiCompatibleProvider::new(
-            provider_config.name.clone(),
-            provider_config.base_url.clone(),
-            provider_config.api_key.clone(),
-            provider_config.model.clone(),
-            ProviderCapabilities {
-                supports_streaming: provider_config.supports_streaming,
-                supports_json_mode: provider_config.supports_json_mode,
-                max_context_tokens: provider_config.max_context_tokens,
-                request_timeout_seconds: provider_config.request_timeout_seconds,
-                stream_idle_timeout_seconds: provider_config.stream_idle_timeout_seconds,
-                max_retries: provider_config.max_retries,
-                ..ProviderCapabilities::default()
-            },
-        )
-        .map_err(|error| anyhow::anyhow!(error.to_string()))?);
+        let provider = build_provider_from_config(&config.provider.default)?;
 
         Ok(Self {
             config,
@@ -906,20 +877,105 @@ pub fn initial_world_state(session_id: SessionId, scenario: &Scenario) -> WorldS
     }
 }
 
-pub fn provider_from_record(
-    record: &ProviderRecord,
+pub fn provider_from_record(record: &ProviderRecord) -> anyhow::Result<Arc<dyn LlmProvider>> {
+    let caps: ProviderCapabilities =
+        serde_json::from_value(record.capabilities.clone()).unwrap_or_default();
+    let api_key = resolve_secret(record.api_key_secret_ref.as_deref())
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    match record.provider_type.as_str() {
+        "" | "openai_compatible" => Ok(Arc::new(
+            OpenAiCompatibleProvider::new(
+                record.name.clone(),
+                record.base_url.clone(),
+                api_key,
+                record.model.clone(),
+                caps,
+            )
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?,
+        )),
+        "llama_cpp" => Ok(Arc::new(
+            LlamaCppProvider::new(
+                record.name.clone(),
+                record.base_url.clone(),
+                api_key,
+                record.model.clone(),
+                caps,
+            )
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?,
+        )),
+        "openrouter" => {
+            let extras: OpenRouterExtras =
+                serde_json::from_value(record.capabilities.clone()).unwrap_or_default();
+            Ok(Arc::new(
+                OpenRouterProvider::new(
+                    record.base_url.clone(),
+                    api_key,
+                    record.model.clone(),
+                    caps,
+                    extras,
+                )
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?,
+            ))
+        }
+        other => anyhow::bail!("unknown provider_type '{other}'"),
+    }
+}
+
+pub fn build_provider_from_config(
+    c: &shared::ProviderConfig,
 ) -> anyhow::Result<Arc<dyn LlmProvider>> {
-    let caps: ProviderCapabilities = serde_json::from_value(record.capabilities.clone())
-        .unwrap_or_default();
-    let provider = OpenAiCompatibleProvider::new(
-        record.name.clone(),
-        record.base_url.clone(),
-        record.api_key_secret_ref.clone(),
-        record.model.clone(),
-        caps,
-    )
-    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-    Ok(Arc::new(provider))
+    let caps = ProviderCapabilities {
+        supports_streaming: c.supports_streaming,
+        supports_json_mode: c.supports_json_mode,
+        max_context_tokens: c.max_context_tokens,
+        request_timeout_seconds: c.request_timeout_seconds,
+        stream_idle_timeout_seconds: c.stream_idle_timeout_seconds,
+        max_retries: c.max_retries,
+        ..ProviderCapabilities::default()
+    };
+    let api_key =
+        resolve_secret(c.api_key.as_deref()).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    match c.provider_type.as_str() {
+        "" | "openai_compatible" => Ok(Arc::new(
+            OpenAiCompatibleProvider::new(
+                c.name.clone(),
+                c.base_url.clone(),
+                api_key,
+                c.model.clone(),
+                caps,
+            )
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?,
+        )),
+        "llama_cpp" => Ok(Arc::new(
+            LlamaCppProvider::new(
+                c.name.clone(),
+                c.base_url.clone(),
+                api_key,
+                c.model.clone(),
+                caps,
+            )
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?,
+        )),
+        "openrouter" => {
+            let extras = OpenRouterExtras {
+                http_referer: c.http_referer.clone(),
+                x_title: c.x_title.clone(),
+                provider_routing: c.provider_routing.clone(),
+                include_usage: c.include_usage,
+            };
+            Ok(Arc::new(
+                OpenRouterProvider::new(
+                    c.base_url.clone(),
+                    api_key,
+                    c.model.clone(),
+                    caps,
+                    extras,
+                )
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?,
+            ))
+        }
+        other => anyhow::bail!("unknown provider_type '{other}'"),
+    }
 }
 
 pub async fn project_session_state(
