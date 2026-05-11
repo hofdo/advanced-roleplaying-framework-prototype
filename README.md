@@ -84,6 +84,8 @@ crates/
   shared/       Shared configuration and common types
 ```
 
+Each crate also has a local `README.md` with ownership, boundary, and engine-context notes. Start with [`crates/README.md`](crates/README.md) for the workspace map.
+
 ### Core Design Rules
 
 - The frontend must not build prompts.

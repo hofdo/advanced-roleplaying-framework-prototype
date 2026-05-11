@@ -5,11 +5,11 @@
 mod common;
 
 use common::{
-    json_body, mock_provider, postgres_test_context_with_config, sample_scenario,
-    send_empty, send_empty_with_bearer, send_json,
+    json_body, mock_provider, postgres_test_context_with_config, sample_scenario, send_empty,
+    send_empty_with_bearer, send_json,
 };
 use domain::{FrontendVisibleState, WorldState};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const ADMIN_TOKEN: &str = "test-admin-token";
 
@@ -80,8 +80,8 @@ async fn flood_guildhall_advances_state_and_projection_hides_gm_only_facts() {
         mock_provider([flood_response.to_string()]),
         admin_postgres_config(),
     )
-        .await
-        .expect("test context");
+    .await
+    .expect("test context");
     let scenario = sample_scenario();
 
     send_json(
@@ -114,9 +114,16 @@ async fn flood_guildhall_advances_state_and_projection_hides_gm_only_facts() {
     let turn_response: Value = json_body(&turn_body);
 
     assert_eq!(turn_status, http::StatusCode::OK, "turn must succeed");
-    assert_eq!(turn_response["world_state_version"], 1, "version must advance to 1");
+    assert_eq!(
+        turn_response["world_state_version"], 1,
+        "version must advance to 1"
+    );
     assert!(
-        turn_response["player_response"].as_str().unwrap_or("").len() > 10,
+        turn_response["player_response"]
+            .as_str()
+            .unwrap_or("")
+            .len()
+            > 10,
         "player response must be non-trivial"
     );
 
@@ -349,11 +356,10 @@ async fn secret_leakage_prevention_rejects_player_known_secret() {
     let world_state: WorldState =
         serde_json::from_value(raw_export["world_state"].clone()).expect("world state");
     assert!(
-        world_state
-            .facts
-            .iter()
-            .all(|fact| fact.visibility != domain::FactVisibility::PlayerKnown
-                || !fact.text.contains("soul-mark was not created")),
+        world_state.facts.iter().all(
+            |fact| fact.visibility != domain::FactVisibility::PlayerKnown
+                || !fact.text.contains("soul-mark was not created")
+        ),
         "the rejected secret leak must not persist into authoritative state"
     );
     ctx.cleanup().await;

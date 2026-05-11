@@ -1,5 +1,5 @@
-use api::{app_router, AppState, ApiStore, PostgresApplicationStore};
-use axum::{body::Body, http::Request, Router};
+use api::{ApiStore, AppState, PostgresApplicationStore, app_router};
+use axum::{Router, body::Body, http::Request};
 use domain::{
     Faction, FactionIdentity, Location, Npc, NpcStatus, Quest, RoleIdentity, Scenario,
     ScenarioType, Secret,
@@ -9,7 +9,7 @@ use http_body_util::BodyExt;
 use persistence::PostgresSessionTurnLock;
 use providers::{LlmProvider, MockProvider};
 use serde::de::DeserializeOwned;
-use sqlx::{postgres::PgPoolOptions, PgPool};
+use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::sync::Arc;
 use testcontainers_modules::{
     postgres::Postgres,
@@ -30,9 +30,7 @@ impl TestContext {
     }
 }
 
-pub async fn postgres_test_context(
-    provider: Arc<dyn LlmProvider>,
-) -> anyhow::Result<TestContext> {
+pub async fn postgres_test_context(provider: Arc<dyn LlmProvider>) -> anyhow::Result<TestContext> {
     postgres_test_context_with_config(provider, {
         let mut config = shared::AppConfig::default();
         config.storage.backend = shared::StorageBackend::Postgres;
@@ -66,8 +64,7 @@ pub async fn postgres_test_context_with_config(
         persistence,
         config.debug.store_raw_provider_output,
     ));
-    let turn_lock: Arc<dyn SessionTurnLock> =
-        Arc::new(PostgresSessionTurnLock::new(pool.clone()));
+    let turn_lock: Arc<dyn SessionTurnLock> = Arc::new(PostgresSessionTurnLock::new(pool.clone()));
     let state = AppState::from_parts(config, store, provider, turn_lock);
 
     Ok(TestContext {

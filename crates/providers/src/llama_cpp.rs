@@ -1,6 +1,6 @@
 use crate::{
-    http, LlmProvider, LlmRequest, LlmResponse, ProviderCapabilities, ProviderError,
-    ProviderHealth, ProviderModel, ProviderReadiness, TokenStream,
+    LlmProvider, LlmRequest, LlmResponse, ProviderCapabilities, ProviderError, ProviderHealth,
+    ProviderModel, ProviderReadiness, ProviderStreamEvent, TokenStream, http,
 };
 use async_stream::try_stream;
 use async_trait::async_trait;
@@ -88,14 +88,18 @@ impl LlamaCppProvider {
             temperature: request.temperature,
             max_tokens: request.max_tokens,
             stream,
-            response_format: (request.json_mode && self.capabilities.supports_json_mode)
-                .then_some(LlamaResponseFormat {
+            response_format: (request.json_mode && self.capabilities.supports_json_mode).then_some(
+                LlamaResponseFormat {
                     r#type: "json_object",
-                }),
+                },
+            ),
         }
     }
 
-    async fn post_chat(&self, body: LlamaChatRequest<'_>) -> Result<reqwest::Response, ProviderError> {
+    async fn post_chat(
+        &self,
+        body: LlamaChatRequest<'_>,
+    ) -> Result<reqwest::Response, ProviderError> {
         let mut builder = self.client.post(self.chat_url()).json(&body);
         if let Some(api_key) = &self.api_key {
             builder = builder.bearer_auth(api_key);
@@ -244,7 +248,10 @@ impl LlmProvider for LlamaCppProvider {
     }
 
     async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, ProviderError> {
-        http::with_retries(self.capabilities.max_retries, || self.try_generate(&request)).await
+        http::with_retries(self.capabilities.max_retries, || {
+            self.try_generate(&request)
+        })
+        .await
     }
 
     async fn stream(&self, request: LlmRequest) -> Result<TokenStream, ProviderError> {
@@ -259,6 +266,7 @@ impl LlmProvider for LlamaCppProvider {
 
         let stream = response.bytes_stream();
         let idle_timeout = Duration::from_secs(self.capabilities.stream_idle_timeout_seconds);
+        let mut decoder = http::SseLineDecoder::default();
         Ok(Box::pin(try_stream! {
             futures::pin_mut!(stream);
             loop {
@@ -270,13 +278,10 @@ impl LlmProvider for LlamaCppProvider {
                 };
                 let bytes = chunk.map_err(|error| http::map_reqwest_error(&error))?;
                 let text = String::from_utf8_lossy(&bytes);
-                for line in text.lines() {
-                    let Some(data) = line.strip_prefix("data: ") else {
-                        continue;
-                    };
-                    if let Some(token) = http::parse_sse_data_line(data)? {
+                for data in decoder.push(&text) {
+                    if let Some(token) = http::parse_sse_data_line(&data)? {
                         if !is_control_token(&token) {
-                            yield token;
+                            yield ProviderStreamEvent::Token(token);
                         }
                     }
                 }
@@ -316,7 +321,11 @@ impl LlmProvider for LlamaCppProvider {
                     .and_then(Value::as_str)
                     .map(|id| ProviderModel {
                         id: id.to_owned(),
-                        name: item.get("id").and_then(Value::as_str).unwrap_or("").to_owned(),
+                        name: item
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_owned(),
                         context_length: None,
                         pricing: None,
                     })

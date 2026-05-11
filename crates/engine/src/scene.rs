@@ -35,28 +35,40 @@ impl SceneClassifier for RuleBasedSceneClassifier {
 
         if contains_any(
             &lower,
-            &["comfort", "grieve", "confess", "reassure", "weep", "embrace"],
+            &[
+                "comfort", "grieve", "confess", "reassure", "weep", "embrace",
+            ],
         ) {
             return SceneReasoningStyle::EmotionalScene;
         }
 
         if contains_any(
             &lower,
-            &["travel", "journey", "camp", "road", "trail", "explore", "scout"],
+            &[
+                "travel", "journey", "camp", "road", "trail", "explore", "scout",
+            ],
         ) {
             return SceneReasoningStyle::TravelExploration;
         }
 
         if contains_any(
             &lower,
-            &["rest", "relax", "shop", "train", "downtime", "recover", "craft"],
+            &[
+                "rest", "relax", "shop", "train", "downtime", "recover", "craft",
+            ],
         ) {
             return SceneReasoningStyle::Downtime;
         }
 
         if contains_any(
             &lower,
-            &["turn in", "report back", "claim reward", "quest complete", "mission complete"],
+            &[
+                "turn in",
+                "report back",
+                "claim reward",
+                "quest complete",
+                "mission complete",
+            ],
         ) {
             return SceneReasoningStyle::QuestResolution;
         }
@@ -126,7 +138,8 @@ mod tests {
     #[test]
     fn rules_keywords_select_adjudication() {
         assert_eq!(
-            RuleBasedSceneClassifier.classify("What does the rule say about ability checks?", &state(None)),
+            RuleBasedSceneClassifier
+                .classify("What does the rule say about ability checks?", &state(None)),
             SceneReasoningStyle::RulesAdjudication
         );
     }

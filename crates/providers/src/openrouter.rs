@@ -1,6 +1,7 @@
 use crate::{
-    http, LlmProvider, LlmRequest, LlmResponse, ProviderCapabilities, ProviderError, ProviderHealth,
-    ProviderModel, ProviderReadiness, StreamMetadata, TokenStream, TokenUsage,
+    LlmProvider, LlmRequest, LlmResponse, ProviderCapabilities, ProviderError, ProviderHealth,
+    ProviderModel, ProviderReadiness, ProviderStreamEvent, StreamMetadata, TokenStream, TokenUsage,
+    http,
 };
 use async_stream::try_stream;
 use async_trait::async_trait;
@@ -8,7 +9,6 @@ use futures::StreamExt;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::time::timeout;
 
@@ -35,7 +35,6 @@ pub struct OpenRouterProvider {
     x_title: Option<String>,
     provider_routing: Option<serde_json::Value>,
     include_usage: bool,
-    last_stream_metadata: Arc<Mutex<Option<StreamMetadata>>>,
 }
 
 impl OpenRouterProvider {
@@ -68,7 +67,6 @@ impl OpenRouterProvider {
             x_title: extras.x_title,
             provider_routing: extras.provider_routing,
             include_usage: extras.include_usage,
-            last_stream_metadata: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -117,7 +115,9 @@ impl OpenRouterProvider {
 
     fn request_body<'a>(&self, request: &'a LlmRequest, stream: bool) -> OpenRouterChatRequest<'a> {
         let stream_options = if stream && self.include_usage {
-            Some(StreamOptions { include_usage: true })
+            Some(StreamOptions {
+                include_usage: true,
+            })
         } else {
             None
         };
@@ -134,8 +134,11 @@ impl OpenRouterProvider {
             temperature: request.temperature,
             max_tokens: request.max_tokens,
             stream,
-            response_format: (request.json_mode && self.capabilities.supports_json_mode)
-                .then_some(OpenAiResponseFormat { r#type: "json_object" }),
+            response_format: (request.json_mode && self.capabilities.supports_json_mode).then_some(
+                OpenAiResponseFormat {
+                    r#type: "json_object",
+                },
+            ),
             provider: self.provider_routing.clone(),
             stream_options,
         }
@@ -216,12 +219,39 @@ impl LlmProvider for OpenRouterProvider {
     }
 
     async fn readiness(&self) -> Result<ProviderReadiness, ProviderError> {
-        let configured = !self.base_url.is_empty();
-        Ok(ProviderReadiness {
-            configured,
-            reachable: true,
-            message: "OpenRouter provider configured".into(),
-        })
+        if self.api_key.as_deref().is_none_or(str::is_empty) {
+            return Ok(ProviderReadiness {
+                configured: false,
+                reachable: false,
+                message: "OpenRouter provider not configured: api_key is missing".into(),
+            });
+        }
+
+        let mut builder = self.client.get(self.models_url());
+        if let Some(api_key) = &self.api_key {
+            builder = builder.bearer_auth(api_key);
+        }
+
+        match builder.send().await {
+            Ok(response) if response.status().is_success() => Ok(ProviderReadiness {
+                configured: true,
+                reachable: true,
+                message: "OpenRouter provider reachable".into(),
+            }),
+            Ok(response) => {
+                let status = response.status().as_u16();
+                Ok(ProviderReadiness {
+                    configured: true,
+                    reachable: false,
+                    message: format!("OpenRouter models endpoint returned status {status}"),
+                })
+            }
+            Err(error) => Ok(ProviderReadiness {
+                configured: true,
+                reachable: false,
+                message: format!("OpenRouter provider not reachable: {error}"),
+            }),
+        }
     }
 
     fn capabilities(&self) -> ProviderCapabilities {
@@ -229,7 +259,10 @@ impl LlmProvider for OpenRouterProvider {
     }
 
     async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, ProviderError> {
-        http::with_retries(self.capabilities.max_retries, || self.try_generate(&request)).await
+        http::with_retries(self.capabilities.max_retries, || {
+            self.try_generate(&request)
+        })
+        .await
     }
 
     async fn stream(&self, request: LlmRequest) -> Result<TokenStream, ProviderError> {
@@ -244,7 +277,7 @@ impl LlmProvider for OpenRouterProvider {
 
         let stream = response.bytes_stream();
         let idle_timeout = Duration::from_secs(self.capabilities.stream_idle_timeout_seconds);
-        let self_meta = Arc::clone(&self.last_stream_metadata);
+        let mut decoder = http::SseLineDecoder::default();
 
         Ok(Box::pin(try_stream! {
             futures::pin_mut!(stream);
@@ -257,14 +290,11 @@ impl LlmProvider for OpenRouterProvider {
                 };
                 let bytes = chunk.map_err(|e| http::map_reqwest_error(&e))?;
                 let text = String::from_utf8_lossy(&bytes);
-                for line in text.lines() {
-                    let Some(data) = line.strip_prefix("data: ") else {
-                        continue;
-                    };
+                for data in decoder.push(&text) {
                     if data.trim() == "[DONE]" {
                         break;
                     }
-                    let value: serde_json::Value = serde_json::from_str(data)
+                    let value: serde_json::Value = serde_json::from_str(&data)
                         .map_err(|e| ProviderError::MalformedResponse(e.to_string()))?;
 
                     // Extract token from choices[0].delta.content if non-empty — yield it
@@ -273,7 +303,7 @@ impl LlmProvider for OpenRouterProvider {
                         .and_then(|v| v.as_str())
                         .filter(|s| !s.is_empty())
                     {
-                        yield content.to_owned();
+                        yield ProviderStreamEvent::Token(content.to_owned());
                     }
 
                     // Capture metadata if usage field is present on this chunk
@@ -284,7 +314,7 @@ impl LlmProvider for OpenRouterProvider {
                             .and_then(|v| v.as_str())
                             .map(str::to_owned);
                         let cost_usd = usage_val.get("cost").and_then(|v| v.as_f64());
-                        *self_meta.lock().unwrap() = Some(StreamMetadata {
+                        yield ProviderStreamEvent::Metadata(StreamMetadata {
                             usage,
                             cost_usd,
                             generation_id,
@@ -294,10 +324,6 @@ impl LlmProvider for OpenRouterProvider {
                 }
             }
         }))
-    }
-
-    fn take_stream_metadata(&self) -> Option<StreamMetadata> {
-        self.last_stream_metadata.lock().unwrap().take()
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, ProviderError> {

@@ -1,6 +1,6 @@
 use crate::{
-    http, LlmProvider, LlmRequest, LlmResponse, ProviderCapabilities, ProviderError,
-    ProviderHealth, ProviderReadiness, TokenStream,
+    LlmProvider, LlmRequest, LlmResponse, ProviderCapabilities, ProviderError, ProviderHealth,
+    ProviderReadiness, ProviderStreamEvent, TokenStream, http,
 };
 use async_stream::try_stream;
 use async_trait::async_trait;
@@ -182,7 +182,10 @@ impl LlmProvider for OpenAiCompatibleProvider {
     }
 
     async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, ProviderError> {
-        http::with_retries(self.capabilities.max_retries, || self.try_generate(&request)).await
+        http::with_retries(self.capabilities.max_retries, || {
+            self.try_generate(&request)
+        })
+        .await
     }
 
     async fn stream(&self, request: LlmRequest) -> Result<TokenStream, ProviderError> {
@@ -197,6 +200,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
 
         let stream = response.bytes_stream();
         let idle_timeout = Duration::from_secs(self.capabilities.stream_idle_timeout_seconds);
+        let mut decoder = http::SseLineDecoder::default();
         Ok(Box::pin(try_stream! {
             futures::pin_mut!(stream);
             loop {
@@ -208,12 +212,9 @@ impl LlmProvider for OpenAiCompatibleProvider {
                 };
                 let bytes = chunk.map_err(|error| http::map_reqwest_error(&error))?;
                 let text = String::from_utf8_lossy(&bytes);
-                for line in text.lines() {
-                    let Some(data) = line.strip_prefix("data: ") else {
-                        continue;
-                    };
-                    if let Some(token) = http::parse_sse_data_line(data)? {
-                        yield token;
+                for data in decoder.push(&text) {
+                    if let Some(token) = http::parse_sse_data_line(&data)? {
+                        yield ProviderStreamEvent::Token(token);
                     }
                 }
             }
@@ -248,7 +249,7 @@ struct OpenAiResponseFormat {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{is_retryable, LlmMessage, LlmMessageRole};
+    use crate::{LlmMessage, LlmMessageRole, is_retryable};
 
     #[tokio::test]
     async fn health_returns_ok_true_when_base_url_set() {
@@ -336,7 +337,9 @@ mod tests {
 
     #[test]
     fn transport_error_is_retryable() {
-        assert!(is_retryable(&ProviderError::Transport("connection refused".into())));
+        assert!(is_retryable(&ProviderError::Transport(
+            "connection refused".into()
+        )));
     }
 
     #[test]

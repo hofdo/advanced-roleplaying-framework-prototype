@@ -1,8 +1,8 @@
 use crate::ValidatedWorldStateDelta;
 use domain::{
-    ActiveSpeakerChange, ClockChange, Fact, FactSource, FactionChange, InventoryChange,
-    NpcChange, QuestChange, QuestStatus, RelationshipChange, RelationshipState, SceneChange,
-    SummaryUpdate, WorldState,
+    ActiveSpeakerChange, ClockChange, Fact, FactSource, FactionChange, InventoryChange, NpcChange,
+    QuestChange, QuestStatus, RelationshipChange, RelationshipState, SceneChange, SummaryUpdate,
+    WorldState,
 };
 
 pub trait WorldStateReducer: Send + Sync {
@@ -57,11 +57,7 @@ impl WorldStateReducer for BasicWorldStateReducer {
                     visibility,
                     ..
                 } => {
-                    let fact_id = format!(
-                        "fact-{}-{}",
-                        state.version + 1,
-                        state.facts.len() + 1
-                    );
+                    let fact_id = format!("fact-{}-{}", state.version + 1, state.facts.len() + 1);
                     state.facts.push(Fact {
                         id: fact_id.clone(),
                         text: fact,
@@ -232,7 +228,8 @@ impl WorldStateReducer for BasicWorldStateReducer {
         for change in delta.inventory_changes {
             match change {
                 InventoryChange::Added { item, .. } => {
-                    if let Some(existing) = state.inventory.iter_mut().find(|entry| entry.id == item.id)
+                    if let Some(existing) =
+                        state.inventory.iter_mut().find(|entry| entry.id == item.id)
                     {
                         *existing = item;
                     } else {
@@ -243,7 +240,8 @@ impl WorldStateReducer for BasicWorldStateReducer {
                     state.inventory.retain(|item| item.id != item_id);
                 }
                 InventoryChange::Updated { item, .. } => {
-                    if let Some(existing) = state.inventory.iter_mut().find(|entry| entry.id == item.id)
+                    if let Some(existing) =
+                        state.inventory.iter_mut().find(|entry| entry.id == item.id)
                     {
                         *existing = item;
                     }
@@ -259,9 +257,12 @@ impl WorldStateReducer for BasicWorldStateReducer {
                     attitude_delta,
                     ..
                 } => {
-                    if let Some(relationship) = state.relationships.iter_mut().find(|relationship| {
-                        relationship.source_id == source_id && relationship.target_id == target_id
-                    }) {
+                    if let Some(relationship) =
+                        state.relationships.iter_mut().find(|relationship| {
+                            relationship.source_id == source_id
+                                && relationship.target_id == target_id
+                        })
+                    {
                         relationship.attitude += attitude_delta;
                     } else {
                         state.relationships.push(RelationshipState {
@@ -278,9 +279,12 @@ impl WorldStateReducer for BasicWorldStateReducer {
                     note,
                     ..
                 } => {
-                    if let Some(relationship) = state.relationships.iter_mut().find(|relationship| {
-                        relationship.source_id == source_id && relationship.target_id == target_id
-                    }) {
+                    if let Some(relationship) =
+                        state.relationships.iter_mut().find(|relationship| {
+                            relationship.source_id == source_id
+                                && relationship.target_id == target_id
+                        })
+                    {
                         relationship.notes.push(note);
                     } else {
                         state.relationships.push(RelationshipState {
@@ -594,9 +598,11 @@ mod tests {
 
         let result = BasicWorldStateReducer.apply(state, delta);
 
-        assert!(result.factions[0]
-            .revealed_goals
-            .contains(&"monitor calamity-levels".into()));
+        assert!(
+            result.factions[0]
+                .revealed_goals
+                .contains(&"monitor calamity-levels".into())
+        );
     }
 
     #[test]
@@ -629,9 +635,11 @@ mod tests {
 
         let result = BasicWorldStateReducer.apply(state, delta);
 
-        assert!(result.quests[0]
-            .completed_objectives
-            .contains(&"sign-form".into()));
+        assert!(
+            result.quests[0]
+                .completed_objectives
+                .contains(&"sign-form".into())
+        );
     }
 
     #[test]
@@ -870,9 +878,18 @@ mod tests {
         );
         assert_eq!(next.inventory.len(), 1);
         assert_eq!(next.inventory[0].id, "ritual-knife");
-        assert_eq!(next.npcs[0].notes, vec!["Still suspects the player is unstable."]);
-        assert_eq!(next.factions[0].public_notes, vec!["Publicly warned the hall."]);
-        assert_eq!(next.factions[0].hidden_notes, vec!["Opened a covert inquiry."]);
+        assert_eq!(
+            next.npcs[0].notes,
+            vec!["Still suspects the player is unstable."]
+        );
+        assert_eq!(
+            next.factions[0].public_notes,
+            vec!["Publicly warned the hall."]
+        );
+        assert_eq!(
+            next.factions[0].hidden_notes,
+            vec!["Opened a covert inquiry."]
+        );
         assert_eq!(
             next.relationships[0].notes,
             vec!["The examiner now reports directly to the guild masters."]

@@ -108,12 +108,12 @@ fn system_rules(mode: Option<TurnMode>) -> String {
         Some(TurnMode::Action) => {
             Some("The player is performing an in-world action. Narrate the outcome.")
         }
-        Some(TurnMode::Direct) => {
-            Some("The player is asking an out-of-character question. Answer as GM directly and clearly. Do not stay in character.")
-        }
-        Some(TurnMode::Remember) => {
-            Some("The player is providing a memory or fact correction. Acknowledge it, update your understanding, and confirm what changed.")
-        }
+        Some(TurnMode::Direct) => Some(
+            "The player is asking an out-of-character question. Answer as GM directly and clearly. Do not stay in character.",
+        ),
+        Some(TurnMode::Remember) => Some(
+            "The player is providing a memory or fact correction. Acknowledge it, update your understanding, and confirm what changed.",
+        ),
         // Dialogue and None: no preamble — character dialogue is the default
         Some(TurnMode::Dialogue) | None => None,
     };
@@ -472,7 +472,11 @@ fn render_narration_context(context: &AgentContext, player_input: &str) -> Strin
     .join("\n\n")
 }
 
-fn render_facts_section(context: &AgentContext, player_input: &str, include_gm_only: bool) -> String {
+fn render_facts_section(
+    context: &AgentContext,
+    player_input: &str,
+    include_gm_only: bool,
+) -> String {
     let player_known = format!(
         "Player-known facts: {}",
         if context.player_known_facts.is_empty() {
@@ -531,7 +535,11 @@ fn relevant_gm_only_facts<'a>(
         .as_ref()
         .map(|location| location.name.as_str())
         .unwrap_or("");
-    let active_role_name = context.active_role.active_role_name.as_deref().unwrap_or("");
+    let active_role_name = context
+        .active_role
+        .active_role_name
+        .as_deref()
+        .unwrap_or("");
     let quest_text = context
         .active_quests
         .iter()
@@ -794,8 +802,7 @@ mod tests {
         };
         use domain::{
             ClockState, Fact, FactSource, FactVisibility, Faction, FactionIdentity, FactionState,
-            Location, Npc, NpcStatus, QuestState, QuestStatus, RoleIdentity,
-            SceneReasoningStyle,
+            Location, Npc, NpcStatus, QuestState, QuestStatus, RoleIdentity, SceneReasoningStyle,
         };
 
         crate::AgentContext {
@@ -819,8 +826,7 @@ mod tests {
                 style: SceneReasoningStyle::PoliticalNegotiation,
                 priorities: vec!["track leverage".into(), "show visible consequence".into()],
                 avoid: vec!["generic exposition".into()],
-                visible_response_shape: "immersive dialogue plus visible social consequence"
-                    .into(),
+                visible_response_shape: "immersive dialogue plus visible social consequence".into(),
             },
             relevant_npcs: vec![NpcContext {
                 npc: Npc {
@@ -1015,10 +1021,22 @@ mod tests {
         );
         let user = user_message_content(&request);
 
-        assert!(!user.contains("GM-only facts"), "streaming prompt must not contain GM-only facts section");
-        assert!(!user.contains("The guildhall panic will expose the hidden ruin"), "streaming prompt must not contain GM-only fact text");
-        assert!(user.contains("RELEVANT FACTS:"), "player-known facts section must still be present");
-        assert!(user.contains("Witnesses saw abnormal mana"), "player-known facts must still appear");
+        assert!(
+            !user.contains("GM-only facts"),
+            "streaming prompt must not contain GM-only facts section"
+        );
+        assert!(
+            !user.contains("The guildhall panic will expose the hidden ruin"),
+            "streaming prompt must not contain GM-only fact text"
+        );
+        assert!(
+            user.contains("RELEVANT FACTS:"),
+            "player-known facts section must still be present"
+        );
+        assert!(
+            user.contains("Witnesses saw abnormal mana"),
+            "player-known facts must still appear"
+        );
     }
 
     #[test]
@@ -1029,7 +1047,10 @@ mod tests {
         );
         let user = user_message_content(&request);
 
-        assert!(user.contains("GM-only facts (do not reveal unless justified):"), "non-streaming (oracle) prompt must retain GM-only facts section");
+        assert!(
+            user.contains("GM-only facts (do not reveal unless justified):"),
+            "non-streaming (oracle) prompt must retain GM-only facts section"
+        );
     }
 
     #[test]
@@ -1041,7 +1062,10 @@ mod tests {
         );
         let user = user_message_content(&request);
 
-        assert!(user.contains("GM-only facts (do not reveal unless justified):"), "delta extraction (oracle) prompt must retain GM-only facts section");
+        assert!(
+            user.contains("GM-only facts (do not reveal unless justified):"),
+            "delta extraction (oracle) prompt must retain GM-only facts section"
+        );
     }
 
     #[test]
@@ -1062,7 +1086,10 @@ mod tests {
         let request = BasicPromptBuilder.build_non_streaming_prompt(
             &snapshot_context(
                 domain::SceneReasoningStyle::CharacterDialogue,
-                &["let the speaker's tone carry the turn", "keep subtext visible"],
+                &[
+                    "let the speaker's tone carry the turn",
+                    "keep subtext visible",
+                ],
                 &["dry exposition"],
                 "in-world dialogue with immediate interpersonal movement",
                 Some(TurnMode::Dialogue),

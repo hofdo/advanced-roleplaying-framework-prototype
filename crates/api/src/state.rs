@@ -14,16 +14,23 @@ use persistence::{
     WorldStateRepository,
 };
 use providers::{
-    LlmProvider, LlamaCppProvider, OpenAiCompatibleProvider, OpenRouterExtras,
-    OpenRouterProvider, ProviderCapabilities, resolve_secret,
+    LlamaCppProvider, LlmProvider, OpenAiCompatibleProvider, OpenRouterExtras, OpenRouterProvider,
+    ProviderCapabilities, resolve_secret,
 };
 use shared::{AppConfig, StorageBackend};
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
 };
+use thiserror::Error;
 use tokio::sync::RwLock;
 use uuid::Uuid;
+
+#[derive(Debug, Error)]
+pub enum ResolveProviderError {
+    #[error("configured session provider {0} is not available")]
+    Missing(Uuid),
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -54,15 +61,9 @@ impl AppState {
                 if config.storage.migrate_on_startup {
                     persistence.migrate().await?;
                 }
-                let pg_lock =
-                    Arc::new(PostgresSessionTurnLock::new(persistence.pool().clone()));
+                let pg_lock = Arc::new(PostgresSessionTurnLock::new(persistence.pool().clone()));
                 let db_records = ProviderConfigRepository::list(&persistence).await?;
-                let mut registry = HashMap::new();
-                for record in db_records {
-                    if let Ok(p) = provider_from_record(&record) {
-                        registry.insert(record.id, p);
-                    }
-                }
+                let registry = build_provider_registry(&db_records)?;
                 (
                     Arc::new(PostgresApplicationStore::new(
                         persistence,
@@ -118,14 +119,15 @@ impl AppState {
     pub async fn resolve_provider(
         &self,
         provider_id: Option<Uuid>,
-    ) -> Arc<dyn LlmProvider> {
+    ) -> Result<Arc<dyn LlmProvider>, ResolveProviderError> {
         if let Some(id) = provider_id {
             let registry = self.provider_registry.read().await;
             if let Some(p) = registry.get(&id) {
-                return Arc::clone(p);
+                return Ok(Arc::clone(p));
             }
+            return Err(ResolveProviderError::Missing(id));
         }
-        Arc::clone(&self.provider)
+        Ok(Arc::clone(&self.provider))
     }
 }
 
@@ -369,7 +371,11 @@ impl ApplicationStore for ApiStore {
         session_id: SessionId,
         provider_id: Option<uuid::Uuid>,
     ) -> Result<Option<SessionRecord>, TurnPipelineError> {
-        Ok(ApiStore::set_session_provider(self, session_id, provider_id))
+        Ok(ApiStore::set_session_provider(
+            self,
+            session_id,
+            provider_id,
+        ))
     }
 
     async fn world_state(
@@ -405,11 +411,13 @@ impl ApplicationStore for ApiStore {
     }
 
     async fn delete_provider(&self, id: Uuid) -> Result<(), TurnPipelineError> {
-        self.inner
-            .lock()
-            .expect("api store mutex")
-            .providers
-            .retain(|p| p.id != id);
+        let mut inner = self.inner.lock().expect("api store mutex");
+        inner.providers.retain(|p| p.id != id);
+        for session in inner.sessions.values_mut() {
+            if session.provider_id == Some(id) {
+                session.provider_id = None;
+            }
+        }
         Ok(())
     }
 }
@@ -877,9 +885,22 @@ pub fn initial_world_state(session_id: SessionId, scenario: &Scenario) -> WorldS
     }
 }
 
+pub fn build_provider_registry(
+    records: &[ProviderRecord],
+) -> anyhow::Result<HashMap<Uuid, Arc<dyn LlmProvider>>> {
+    let mut registry = HashMap::new();
+    for record in records {
+        let provider = provider_from_record(record).map_err(|error| {
+            anyhow::anyhow!("invalid provider {} ({}): {error}", record.id, record.name)
+        })?;
+        registry.insert(record.id, provider);
+    }
+    Ok(registry)
+}
+
 pub fn provider_from_record(record: &ProviderRecord) -> anyhow::Result<Arc<dyn LlmProvider>> {
-    let caps: ProviderCapabilities =
-        serde_json::from_value(record.capabilities.clone()).unwrap_or_default();
+    let caps: ProviderCapabilities = serde_json::from_value(record.capabilities.clone())
+        .map_err(|e| anyhow::anyhow!("invalid provider capabilities: {e}"))?;
     let api_key = resolve_secret(record.api_key_secret_ref.as_deref())
         .map_err(|e| anyhow::anyhow!(e.to_string()))?;
     match record.provider_type.as_str() {
@@ -964,14 +985,8 @@ pub fn build_provider_from_config(
                 include_usage: c.include_usage,
             };
             Ok(Arc::new(
-                OpenRouterProvider::new(
-                    c.base_url.clone(),
-                    api_key,
-                    c.model.clone(),
-                    caps,
-                    extras,
-                )
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?,
+                OpenRouterProvider::new(c.base_url.clone(), api_key, c.model.clone(), caps, extras)
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?,
             ))
         }
         other => anyhow::bail!("unknown provider_type '{other}'"),
@@ -1002,6 +1017,7 @@ pub async fn project_session_state(
 mod tests {
     use super::*;
     use providers::MockProvider;
+    use serde_json::json;
 
     #[tokio::test]
     async fn memory_app_state_reports_memory_storage_status() {
@@ -1035,14 +1051,14 @@ mod tests {
             .await
             .insert(registry_id, Arc::clone(&registry_provider));
 
-        let resolved = state.resolve_provider(Some(registry_id)).await;
+        let resolved = state.resolve_provider(Some(registry_id)).await.unwrap();
         let resolved_name = resolved.health().await.unwrap().name;
 
         assert_eq!(resolved_name, "registry");
     }
 
     #[tokio::test]
-    async fn resolve_provider_falls_back_to_default_when_id_not_in_registry() {
+    async fn resolve_provider_returns_error_when_id_not_in_registry() {
         let default_provider: Arc<dyn LlmProvider> =
             Arc::new(MockProvider::new("default", std::iter::empty::<String>()));
         let unknown_id = Uuid::new_v4();
@@ -1056,10 +1072,12 @@ mod tests {
             Arc::new(InMemorySessionTurnLock::default()),
         );
 
-        let resolved = state.resolve_provider(Some(unknown_id)).await;
-        let resolved_name = resolved.health().await.unwrap().name;
+        let error = match state.resolve_provider(Some(unknown_id)).await {
+            Ok(_) => panic!("missing provider should fail"),
+            Err(error) => error,
+        };
 
-        assert_eq!(resolved_name, "default");
+        assert!(error.to_string().contains("provider"));
     }
 
     #[tokio::test]
@@ -1076,7 +1094,7 @@ mod tests {
             Arc::new(InMemorySessionTurnLock::default()),
         );
 
-        let resolved = state.resolve_provider(None).await;
+        let resolved = state.resolve_provider(None).await.unwrap();
         let resolved_name = resolved.health().await.unwrap().name;
 
         assert_eq!(resolved_name, "default");
@@ -1167,6 +1185,28 @@ mod tests {
             .and_then(|messages| messages.iter().find(|message| message.id == assistant_id))
             .expect("assistant message");
         assert_eq!(assistant.raw_provider_output, Some(raw));
+    }
+
+    #[test]
+    fn build_provider_registry_fails_for_invalid_provider_record() {
+        let bad_record = ProviderRecord {
+            id: Uuid::new_v4(),
+            name: "broken".into(),
+            provider_type: "unknown_provider_xyz".into(),
+            base_url: "http://localhost:11434".into(),
+            model: "llama3".into(),
+            api_key_secret_ref: None,
+            capabilities: json!({}),
+            is_default: false,
+        };
+
+        let error = match build_provider_registry(&[bad_record]) {
+            Ok(_) => panic!("registry build should fail"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("invalid provider"));
+        assert!(error.to_string().contains("broken"));
     }
 
     fn sample_scenario_for_tests() -> Scenario {

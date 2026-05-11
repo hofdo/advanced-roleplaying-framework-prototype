@@ -51,8 +51,8 @@ impl AppConfig {
             config.provider.default.x_title = Some(t);
         }
         if let Ok(enabled) = std::env::var("ENABLE_ADMIN_ROUTES") {
-            config.admin.enabled = parse_bool_env(&enabled)
-                .context("ENABLE_ADMIN_ROUTES must be a boolean")?;
+            config.admin.enabled =
+                parse_bool_env(&enabled).context("ENABLE_ADMIN_ROUTES must be a boolean")?;
         }
         if let Ok(token) = std::env::var("ADMIN_TOKEN") {
             config.admin.token = Some(token);
@@ -248,7 +248,9 @@ mod tests {
         let mut config = AppConfig::default();
         config.admin.enabled = true;
 
-        let error = config.validate().expect_err("admin config should be rejected");
+        let error = config
+            .validate()
+            .expect_err("admin config should be rejected");
 
         assert!(
             error

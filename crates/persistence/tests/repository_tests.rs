@@ -126,8 +126,12 @@ async fn create_and_get_scenario() {
 async fn list_scenarios_returns_all() {
     let (p, _container) = setup().await;
 
-    ScenarioRepository::create(&p, sample_scenario()).await.unwrap();
-    ScenarioRepository::create(&p, sample_scenario()).await.unwrap();
+    ScenarioRepository::create(&p, sample_scenario())
+        .await
+        .unwrap();
+    ScenarioRepository::create(&p, sample_scenario())
+        .await
+        .unwrap();
 
     let list = ScenarioRepository::list(&p).await.unwrap();
     assert_eq!(list.len(), 2);
@@ -140,7 +144,9 @@ async fn update_scenario_changes_title() {
 
     let mut scenario = sample_scenario();
     let id = scenario.id;
-    ScenarioRepository::create(&p, scenario.clone()).await.unwrap();
+    ScenarioRepository::create(&p, scenario.clone())
+        .await
+        .unwrap();
 
     scenario.title = "Updated Title".into();
     ScenarioRepository::update(&p, scenario).await.unwrap();
@@ -273,8 +279,7 @@ async fn set_provider_on_session() {
 async fn set_provider_unknown_session_returns_not_found() {
     let (p, _container) = setup().await;
 
-    let result =
-        SessionRepository::set_provider(&p, Uuid::new_v4(), Some(Uuid::new_v4())).await;
+    let result = SessionRepository::set_provider(&p, Uuid::new_v4(), Some(Uuid::new_v4())).await;
 
     assert!(
         matches!(result, Err(persistence::RepoError::NotFound)),
@@ -344,9 +349,7 @@ async fn save_second_version_replaces_first() {
 async fn get_unknown_session_world_state_returns_none() {
     let (p, _container) = setup().await;
 
-    let result = WorldStateRepository::get(&p, Uuid::new_v4())
-        .await
-        .unwrap();
+    let result = WorldStateRepository::get(&p, Uuid::new_v4()).await.unwrap();
     assert!(result.is_none());
 }
 
@@ -371,9 +374,7 @@ async fn append_and_recent_messages() {
         MessageRepository::append(&p, &msg).await.unwrap();
     }
 
-    let recent = MessageRepository::recent(&p, session.id, 3)
-        .await
-        .unwrap();
+    let recent = MessageRepository::recent(&p, session.id, 3).await.unwrap();
     assert_eq!(recent.len(), 3);
 }
 
@@ -395,9 +396,7 @@ async fn recent_messages_respects_limit() {
     }
 
     // Asking for more than available — should return only 2
-    let recent = MessageRepository::recent(&p, session.id, 10)
-        .await
-        .unwrap();
+    let recent = MessageRepository::recent(&p, session.id, 10).await.unwrap();
     assert_eq!(recent.len(), 2);
 }
 

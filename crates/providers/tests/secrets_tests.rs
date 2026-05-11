@@ -1,5 +1,5 @@
-use providers::resolve_secret;
 use providers::SecretError;
+use providers::resolve_secret;
 
 #[test]
 fn none_input_returns_none() {

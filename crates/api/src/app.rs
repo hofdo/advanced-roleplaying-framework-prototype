@@ -1,7 +1,7 @@
 use crate::{ApiError, AppState, project_session_state, provider_from_record};
 use axum::{
-    body::Body,
     Json, Router,
+    body::Body,
     extract::{Path, State},
     http::{Request, StatusCode, header},
     middleware::{self, Next},
@@ -15,6 +15,7 @@ use engine::{
     HiddenReasoningStripper, PromptBuilder, SessionTurnLock, TurnRequestInput,
 };
 use futures::StreamExt;
+use providers::ProviderStreamEvent;
 use serde::{Deserialize, Serialize};
 use std::{convert::Infallible, sync::Arc};
 use uuid::Uuid;
@@ -57,10 +58,7 @@ pub fn app_router(app_state: AppState) -> Router {
                     "/admin/sessions/:session_id/export/raw",
                     get(export_session_raw),
                 )
-                .route(
-                    "/admin/sessions/:session_id/turn/debug",
-                    post(debug_turn),
-                )
+                .route("/admin/sessions/:session_id/turn/debug", post(debug_turn))
                 .route_layer(middleware::from_fn_with_state(
                     app_state.clone(),
                     require_admin_token,
@@ -121,13 +119,19 @@ async fn register_provider(
         base_url: request.base_url,
         model: request.model,
         api_key_secret_ref: request.api_key_secret_ref,
-        capabilities: request.capabilities.unwrap_or(serde_json::Value::Object(Default::default())),
+        capabilities: request
+            .capabilities
+            .unwrap_or(serde_json::Value::Object(Default::default())),
         is_default: request.is_default,
     };
+    let provider =
+        provider_from_record(&record).map_err(|error| ApiError::bad_request(error.to_string()))?;
     let created = state.store.create_provider(record.clone()).await?;
-    if let Ok(provider) = provider_from_record(&record) {
-        state.provider_registry.write().await.insert(record.id, provider);
-    }
+    state
+        .provider_registry
+        .write()
+        .await
+        .insert(record.id, provider);
     Ok((StatusCode::CREATED, Json(created)))
 }
 
@@ -145,17 +149,14 @@ async fn list_provider_models(
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<providers::ProviderModel>>, ApiError> {
     let registry = state.provider_registry.read().await;
-    let provider = registry.get(&id).ok_or_else(ApiError::not_found)?;
-    provider
-        .list_models()
-        .await
-        .map(Json)
-        .map_err(|e| match e {
-            providers::ProviderError::Unsupported(_) => {
-                ApiError::status(StatusCode::NOT_IMPLEMENTED, e.to_string())
-            }
-            other => ApiError::from(engine::TurnPipelineError::from(other)),
-        })
+    let provider = registry.get(&id).cloned().ok_or_else(ApiError::not_found)?;
+    drop(registry);
+    provider.list_models().await.map(Json).map_err(|e| match e {
+        providers::ProviderError::Unsupported(_) => {
+            ApiError::status(StatusCode::NOT_IMPLEMENTED, e.to_string())
+        }
+        other => ApiError::from(engine::TurnPipelineError::from(other)),
+    })
 }
 
 async fn test_provider(
@@ -331,11 +332,8 @@ async fn export_session(
     let events = state.store.events(session_id).await?;
     // Project using player context so GM-only facts and hidden world state
     // are never exposed to the caller.
-    let visible_state = BasicFrontendStateProjector.project(
-        &scenario,
-        &world_state,
-        &ViewerContext::player(),
-    );
+    let visible_state =
+        BasicFrontendStateProjector.project(&scenario, &world_state, &ViewerContext::player());
     Ok(Json(ExportSessionResponse {
         session,
         visible_state,
@@ -378,12 +376,12 @@ async fn turn(
         .get_session(session_id)
         .await?
         .ok_or_else(ApiError::not_found)?;
-    let provider = state.resolve_provider(session.provider_id).await;
-    let pipeline = DefaultTurnPipeline::with_lock(
-        provider,
-        Arc::clone(&state.store),
-        state.turn_lock.clone(),
-    );
+    let provider = state
+        .resolve_provider(session.provider_id)
+        .await
+        .map_err(|error| ApiError::status(StatusCode::CONFLICT, error.to_string()))?;
+    let pipeline =
+        DefaultTurnPipeline::with_lock(provider, Arc::clone(&state.store), state.turn_lock.clone());
     let response = pipeline
         .process_turn(TurnRequestInput {
             session_id,
@@ -412,12 +410,12 @@ async fn debug_turn(
         .get_session(session_id)
         .await?
         .ok_or_else(ApiError::not_found)?;
-    let provider = state.resolve_provider(session.provider_id).await;
-    let pipeline = DefaultTurnPipeline::with_lock(
-        provider,
-        Arc::clone(&state.store),
-        state.turn_lock.clone(),
-    );
+    let provider = state
+        .resolve_provider(session.provider_id)
+        .await
+        .map_err(|error| ApiError::status(StatusCode::CONFLICT, error.to_string()))?;
+    let pipeline =
+        DefaultTurnPipeline::with_lock(provider, Arc::clone(&state.store), state.turn_lock.clone());
     let response = pipeline
         .process_turn_debug(TurnRequestInput {
             session_id,
@@ -444,13 +442,22 @@ async fn turn_stream(
 ) -> Sse<impl futures::Stream<Item = Result<Event, Infallible>>> {
     // Resolve provider: session-scoped override takes priority over default.
     // Load session before entering the stream so we can pick the right provider.
-    let resolved_provider = match state.store.get_session(session_id).await {
-        Ok(Some(session)) => state.resolve_provider(session.provider_id).await,
-        Ok(None) => Arc::clone(&state.provider),
-        Err(_) => Arc::clone(&state.provider),
-    };
+    let (resolved_provider, provider_resolution_error) =
+        match state.store.get_session(session_id).await {
+            Ok(Some(session)) => match state.resolve_provider(session.provider_id).await {
+                Ok(provider) => (provider, None),
+                Err(error) => (Arc::clone(&state.provider), Some(error.to_string())),
+            },
+            Ok(None) => (Arc::clone(&state.provider), None),
+            Err(_) => (Arc::clone(&state.provider), None),
+        };
 
     let events = async_stream::stream! {
+        if let Some(error) = provider_resolution_error {
+            yield Ok(error_event(error));
+            return;
+        }
+
         let input = request.input;
         let mode = request.mode;
         // Build a pipeline so all component logic (prepare / finalize) lives in
@@ -529,9 +536,10 @@ async fn turn_stream(
 
         futures::pin_mut!(token_stream);
         let mut raw_response = String::new();
+        let mut stream_meta = None;
         while let Some(token) = token_stream.next().await {
             match token {
-                Ok(token) => {
+                Ok(ProviderStreamEvent::Token(token)) => {
                     if token.contains("<think>")
                         || token.contains("Internal reasoning:")
                         || token.contains("Chain of thought:")
@@ -545,6 +553,9 @@ async fn turn_stream(
                         .event("token")
                         .json_data(TokenEvent { text: token })
                         .expect("token event serializes"));
+                }
+                Ok(ProviderStreamEvent::Metadata(meta)) => {
+                    stream_meta = Some(meta);
                 }
                 Err(error) => {
                     if matches!(error, providers::ProviderError::StreamIdleTimeout) {
@@ -562,7 +573,6 @@ async fn turn_stream(
             }
         }
 
-        let stream_meta = resolved_provider.take_stream_metadata();
         let stream_usage = stream_meta.as_ref().and_then(|m| m.usage.clone());
 
         // Strip hidden reasoning from the accumulated tokens, then call the

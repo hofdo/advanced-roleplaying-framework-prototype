@@ -1,6 +1,6 @@
 use crate::{
     LlmProvider, LlmRequest, LlmResponse, ProviderCapabilities, ProviderError, ProviderHealth,
-    ProviderReadiness, TokenStream,
+    ProviderReadiness, ProviderStreamEvent, TokenStream,
 };
 use async_stream::stream;
 use async_trait::async_trait;
@@ -83,7 +83,7 @@ impl LlmProvider for MockProvider {
         let text = self.pop_response()?;
         Ok(Box::pin(stream! {
             for token in text.split_whitespace() {
-                yield Ok(format!("{token} "));
+                yield Ok(ProviderStreamEvent::Token(format!("{token} ")));
             }
         }))
     }
@@ -92,7 +92,7 @@ impl LlmProvider for MockProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{LlmMessage, LlmMessageRole};
+    use crate::{LlmMessage, LlmMessageRole, ProviderStreamEvent};
     use futures::StreamExt;
 
     fn request() -> LlmRequest {
@@ -138,6 +138,14 @@ mod tests {
             .collect::<Vec<_>>()
             .await
             .into_iter()
+            .map(|item| {
+                item.map(|event| match event {
+                    ProviderStreamEvent::Token(token) => token,
+                    ProviderStreamEvent::Metadata(meta) => {
+                        panic!("unexpected metadata event in mock stream: {meta:?}")
+                    }
+                })
+            })
             .collect::<Result<Vec<_>, _>>()
             .expect("tokens");
 

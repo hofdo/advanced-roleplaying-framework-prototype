@@ -1,7 +1,8 @@
 use crate::ValidatedWorldStateDelta;
 use domain::{
     EntityRef, FactVisibility, FrontendStatePatch, FrontendVisibleState, QuestStatus, Scenario,
-    ViewerContext, VisibleClock, VisibleFact, VisibleLocation, VisibleNpc, VisibleQuest, WorldState,
+    ViewerContext, VisibleClock, VisibleFact, VisibleLocation, VisibleNpc, VisibleQuest,
+    WorldState,
 };
 
 pub trait FrontendStateProjector: Send + Sync {
@@ -516,13 +517,21 @@ mod tests {
         let admin_view = BasicFrontendStateProjector.project(
             &scenario,
             &state,
-            &ViewerContext { is_admin: true, include_debug_state: true },
+            &ViewerContext {
+                is_admin: true,
+                include_debug_state: true,
+            },
         );
 
         assert_eq!(player_view.player_known_facts.len(), 1);
         assert_eq!(player_view.player_known_facts[0].id, "known");
         assert_eq!(admin_view.player_known_facts.len(), 2);
-        assert!(admin_view.player_known_facts.iter().any(|f| f.id == "secret"));
+        assert!(
+            admin_view
+                .player_known_facts
+                .iter()
+                .any(|f| f.id == "secret")
+        );
     }
 
     #[test]

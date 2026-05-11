@@ -1,5 +1,5 @@
 use domain::{
-    ClockChange, Fact, FactionChange, FactVisibility, InventoryChange, InventoryItem, NpcChange,
+    ClockChange, Fact, FactVisibility, FactionChange, InventoryChange, InventoryItem, NpcChange,
     NpcState, NpcStatus, QuestChange, RelationshipChange, SceneReasoningStyle, TurnMode,
 };
 
@@ -369,8 +369,7 @@ fn npc_state_visible_to_player_defaults_to_true() {
 
 #[test]
 fn clock_state_visible_to_player_defaults_to_true() {
-    let json =
-        r#"{"id":"doom-clock","title":"Doom","current":1,"max":6,"consequence":"Ruin"}"#;
+    let json = r#"{"id":"doom-clock","title":"Doom","current":1,"max":6,"consequence":"Ruin"}"#;
     let clock: domain::ClockState = serde_json::from_str(json).unwrap();
     assert!(clock.visible_to_player);
 }

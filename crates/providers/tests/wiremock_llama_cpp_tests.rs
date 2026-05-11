@@ -1,9 +1,11 @@
 use futures::StreamExt;
-use providers::{LlmMessage, LlmMessageRole, LlmProvider, LlmRequest, ProviderCapabilities};
 use providers::LlamaCppProvider;
+use providers::{
+    LlmMessage, LlmMessageRole, LlmProvider, LlmRequest, ProviderCapabilities, ProviderStreamEvent,
+};
 use serde_json::json;
-use wiremock::{MockServer, Mock, ResponseTemplate};
 use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn minimal_request() -> LlmRequest {
     LlmRequest {
@@ -84,7 +86,11 @@ async fn readiness_extracts_model_from_props() {
     let provider = provider_for(&server.uri());
     let readiness = provider.readiness().await.expect("readiness");
 
-    assert!(readiness.reachable, "expected reachable=true, got: {:?}", readiness);
+    assert!(
+        readiness.reachable,
+        "expected reachable=true, got: {:?}",
+        readiness
+    );
     assert!(
         readiness.message.contains("qwen-7b"),
         "message should contain model name, got: {:?}",
@@ -104,7 +110,11 @@ async fn readiness_handles_missing_model_field() {
     let provider = provider_for(&server.uri());
     let readiness = provider.readiness().await.expect("readiness");
 
-    assert!(readiness.reachable, "expected reachable=true, got: {:?}", readiness);
+    assert!(
+        readiness.reachable,
+        "expected reachable=true, got: {:?}",
+        readiness
+    );
     assert!(
         readiness.message.contains("unavailable"),
         "message should mention 'unavailable', got: {:?}",
@@ -159,7 +169,10 @@ async fn stream_filters_think_control_tokens() {
     let provider = provider_for(&server.uri());
     let stream = provider.stream(minimal_request()).await.expect("stream");
     let tokens: Vec<String> = stream
-        .map(|item| item.expect("stream item"))
+        .map(|item| match item.expect("stream item") {
+            ProviderStreamEvent::Token(token) => token,
+            other => panic!("unexpected non-token event: {other:?}"),
+        })
         .collect()
         .await;
 
@@ -196,7 +209,10 @@ async fn stream_filters_pipe_delimited_control_tokens() {
     let provider = provider_for(&server.uri());
     let stream = provider.stream(minimal_request()).await.expect("stream");
     let tokens: Vec<String> = stream
-        .map(|item| item.expect("stream item"))
+        .map(|item| match item.expect("stream item") {
+            ProviderStreamEvent::Token(token) => token,
+            other => panic!("unexpected non-token event: {other:?}"),
+        })
         .collect()
         .await;
 

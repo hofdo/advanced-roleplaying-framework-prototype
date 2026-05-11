@@ -74,8 +74,7 @@ impl DeltaValidator for BasicDeltaValidator {
             if fact.visibility == FactVisibility::PlayerKnown {
                 let leaked = find_leaked_gm_only_facts(world_state, &fact.text);
                 for gm_fact in &leaked {
-                    let explicitly_ref =
-                        fact.related_secret_ids.iter().any(|id| id == &gm_fact.id);
+                    let explicitly_ref = fact.related_secret_ids.iter().any(|id| id == &gm_fact.id);
                     let has_proof = fact
                         .reveal_condition_satisfied
                         .as_deref()
@@ -411,9 +410,7 @@ pub enum DeltaValidationError {
     StandingOutOfRange { faction_id: EntityKey, value: i32 },
     #[error("invalid NPC status transition: {0}")]
     InvalidStatus(String),
-    #[error(
-        "PlayerKnown fact references secrets but provides no reveal_condition_satisfied proof"
-    )]
+    #[error("PlayerKnown fact references secrets but provides no reveal_condition_satisfied proof")]
     MissingRevealProof,
     #[error("NPC {npc_id} (status: {status:?}) cannot perform {action}")]
     InvalidNpcStatusAction {
@@ -671,10 +668,7 @@ mod tests {
             .expect_err("dead NPC gaining knowledge must be rejected");
 
         assert!(
-            matches!(
-                err,
-                DeltaValidationError::InvalidNpcStatusAction { .. }
-            ),
+            matches!(err, DeltaValidationError::InvalidNpcStatusAction { .. }),
             "expected InvalidNpcStatusAction, got: {err:?}"
         );
     }
@@ -696,10 +690,7 @@ mod tests {
             .expect_err("dead NPC attitude change must be rejected");
 
         assert!(
-            matches!(
-                err,
-                DeltaValidationError::InvalidNpcStatusAction { .. }
-            ),
+            matches!(err, DeltaValidationError::InvalidNpcStatusAction { .. }),
             "expected InvalidNpcStatusAction, got: {err:?}"
         );
     }
@@ -721,10 +712,7 @@ mod tests {
             .expect_err("dead NPC location change must be rejected");
 
         assert!(
-            matches!(
-                err,
-                DeltaValidationError::InvalidNpcStatusAction { .. }
-            ),
+            matches!(err, DeltaValidationError::InvalidNpcStatusAction { .. }),
             "expected InvalidNpcStatusAction, got: {err:?}"
         );
     }
@@ -767,10 +755,7 @@ mod tests {
             .expect_err("unconscious NPC gaining knowledge must be rejected");
 
         assert!(
-            matches!(
-                err,
-                DeltaValidationError::InvalidNpcStatusAction { .. }
-            ),
+            matches!(err, DeltaValidationError::InvalidNpcStatusAction { .. }),
             "expected InvalidNpcStatusAction, got: {err:?}"
         );
     }

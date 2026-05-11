@@ -1,12 +1,11 @@
 use crate::{
-    repair_prompt, AgentContext, BasicContextBuilder, BasicDeltaValidator,
-    BasicFrontendStateProjector, BasicHiddenReasoningStripper, BasicPromptBuilder,
-    BasicReasoningStyleOptimizer, BasicRoleIdentityActivator, BasicWorldStateReducer,
-    BuildContextInput, ContextBuilder, DeltaValidationError, DeltaValidator,
-    FrontendStateProjector, HiddenReasoningStripper, InMemorySessionTurnLock, JsonResponseParser,
-    PromptBuilder, ReasoningStyleOptimizer, ResponseParser, RoleIdentityActivator,
-    RuleBasedSceneClassifier, SceneClassifier, SessionTurnLock, TurnLockError,
-    ValidatedWorldStateDelta, WorldStateReducer,
+    AgentContext, BasicContextBuilder, BasicDeltaValidator, BasicFrontendStateProjector,
+    BasicHiddenReasoningStripper, BasicPromptBuilder, BasicReasoningStyleOptimizer,
+    BasicRoleIdentityActivator, BasicWorldStateReducer, BuildContextInput, ContextBuilder,
+    DeltaValidationError, DeltaValidator, FrontendStateProjector, HiddenReasoningStripper,
+    InMemorySessionTurnLock, JsonResponseParser, PromptBuilder, ReasoningStyleOptimizer,
+    ResponseParser, RoleIdentityActivator, RuleBasedSceneClassifier, SceneClassifier,
+    SessionTurnLock, TurnLockError, ValidatedWorldStateDelta, WorldStateReducer, repair_prompt,
 };
 use async_trait::async_trait;
 use domain::{
@@ -342,9 +341,8 @@ where
                         delta
                     }
                     Err(repair_err) => {
-                        let description = format!(
-                            "delta parse failed after repair attempt: {repair_err}"
-                        );
+                        let description =
+                            format!("delta parse failed after repair attempt: {repair_err}");
                         tracing::error!("{description}");
                         self.store
                             .persist_error_event(session_id, description.clone())
@@ -795,10 +793,7 @@ mod tests {
             .await
             .expect("turn response");
 
-        let persisted_messages = store
-            .persisted_messages
-            .lock()
-            .expect("messages mutex");
+        let persisted_messages = store.persisted_messages.lock().expect("messages mutex");
         let assistant_message = persisted_messages
             .iter()
             .find(|message| message.role == MessageRole::Assistant)
@@ -996,11 +991,13 @@ mod tests {
             .await
             .expect("finalize with repair");
 
-        assert!(finalized
-            .validated_delta
-            .0
-            .event_log_entries
-            .contains(&"Repaired successfully.".to_owned()));
+        assert!(
+            finalized
+                .validated_delta
+                .0
+                .event_log_entries
+                .contains(&"Repaired successfully.".to_owned())
+        );
     }
 
     /// Both the initial parse and the repair call return bad JSON.  The
@@ -1017,10 +1014,7 @@ mod tests {
         }));
 
         // The repair call also returns invalid JSON.
-        let provider = Arc::new(MockProvider::new(
-            "mock",
-            ["not json either".into()],
-        ));
+        let provider = Arc::new(MockProvider::new("mock", ["not json either".into()]));
         let pipeline = DefaultTurnPipeline::new(Arc::clone(&provider), Arc::clone(&store));
 
         let prepared = pipeline
@@ -1045,11 +1039,7 @@ mod tests {
         );
         // World state must NOT have been persisted.
         assert!(
-            store
-                .persisted_state
-                .lock()
-                .expect("state mutex")
-                .is_none(),
+            store.persisted_state.lock().expect("state mutex").is_none(),
             "world state must not be mutated on double parse failure"
         );
     }

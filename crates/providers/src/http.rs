@@ -1,16 +1,41 @@
-use crate::{is_retryable, ProviderError};
+use crate::{ProviderError, is_retryable};
 use std::future::Future;
 use std::time::Duration;
+
+#[derive(Debug, Default)]
+pub struct SseLineDecoder {
+    buffer: String,
+}
+
+impl SseLineDecoder {
+    pub fn push(&mut self, chunk: &str) -> Vec<String> {
+        self.buffer.push_str(chunk);
+        let mut lines = Vec::new();
+
+        while let Some(boundary) = self.buffer.find("\n\n") {
+            let frame = self.buffer[..boundary].to_owned();
+            self.buffer.drain(..boundary + 2);
+
+            let data = frame
+                .lines()
+                .filter_map(|line| line.strip_prefix("data: "))
+                .collect::<Vec<_>>()
+                .join("\n");
+            if !data.is_empty() {
+                lines.push(data);
+            }
+        }
+
+        lines
+    }
+}
 
 /// Execute `op` with retry and exponential backoff.
 ///
 /// Retries up to `max_retries` additional attempts (total = max_retries + 1).
 /// Delay: min(100 * 2^attempt, 2000) ms between attempts.
 /// Only retries when `is_retryable(&err)` returns true.
-pub async fn with_retries<F, Fut, T>(
-    max_retries: u8,
-    mut op: F,
-) -> Result<T, ProviderError>
+pub async fn with_retries<F, Fut, T>(max_retries: u8, mut op: F) -> Result<T, ProviderError>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<T, ProviderError>>,
@@ -54,10 +79,37 @@ pub fn parse_sse_data_line(data: &str) -> Result<Option<String>, ProviderError> 
     if data.trim() == "[DONE]" {
         return Ok(None);
     }
-    let value: serde_json::Value = serde_json::from_str(data)
-        .map_err(|e| ProviderError::MalformedResponse(e.to_string()))?;
+    let value: serde_json::Value =
+        serde_json::from_str(data).map_err(|e| ProviderError::MalformedResponse(e.to_string()))?;
     Ok(value
         .pointer("/choices/0/delta/content")
         .and_then(serde_json::Value::as_str)
         .map(str::to_owned))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn sse_line_decoder_reassembles_fragmented_data_lines() {
+        let mut decoder = super::SseLineDecoder::default();
+
+        let first = decoder.push("data: {\"choices\":[{\"delta\":{\"cont");
+        let second = decoder.push("ent\":\"hello\"}}]}\n\n");
+
+        assert!(first.is_empty(), "unexpected completed lines: {first:?}");
+        assert_eq!(second.len(), 1, "unexpected completed lines: {second:?}");
+        assert_eq!(
+            second[0],
+            "{\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}"
+        );
+    }
+
+    #[test]
+    fn sse_line_decoder_ignores_non_data_lines() {
+        let mut decoder = super::SseLineDecoder::default();
+
+        let lines = decoder.push("event: message\nid: 1\ndata: hello\n\n");
+
+        assert_eq!(lines, vec!["hello".to_owned()]);
+    }
 }

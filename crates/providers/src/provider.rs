@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::pin::Pin;
 use thiserror::Error;
 
-pub type TokenStream = Pin<Box<dyn Stream<Item = Result<String, ProviderError>> + Send>>;
+pub type TokenStream =
+    Pin<Box<dyn Stream<Item = Result<ProviderStreamEvent, ProviderError>> + Send>>;
 
 #[async_trait]
 pub trait LlmProvider: Send + Sync {
@@ -15,9 +16,6 @@ pub trait LlmProvider: Send + Sync {
     async fn stream(&self, request: LlmRequest) -> Result<TokenStream, ProviderError>;
     async fn list_models(&self) -> Result<Vec<ProviderModel>, ProviderError> {
         Err(ProviderError::Unsupported("list_models".into()))
-    }
-    fn take_stream_metadata(&self) -> Option<StreamMetadata> {
-        None
     }
 }
 
@@ -36,6 +34,7 @@ pub struct ProviderReadiness {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
 pub struct ProviderCapabilities {
     pub supports_streaming: bool,
     pub supports_json_mode: bool,
@@ -149,6 +148,13 @@ pub struct StreamMetadata {
     pub extra: serde_json::Value,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum ProviderStreamEvent {
+    Token(String),
+    Metadata(StreamMetadata),
+}
+
 #[derive(Debug, Error)]
 pub enum ProviderError {
     #[error("provider transport error: {0}")]
@@ -231,6 +237,8 @@ mod tests {
             body: String::new()
         }));
         assert!(!is_retryable(&ProviderError::NoMockResponse));
-        assert!(!is_retryable(&ProviderError::Unsupported("list_models".into())));
+        assert!(!is_retryable(&ProviderError::Unsupported(
+            "list_models".into()
+        )));
     }
 }

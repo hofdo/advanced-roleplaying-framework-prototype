@@ -1,17 +1,20 @@
 mod common;
 
 use axum::{body::Body, http::Request};
-use http_body_util::BodyExt;
-use providers::{LlmProvider, LlmRequest, LlmResponse, ProviderCapabilities, ProviderError, ProviderHealth, ProviderReadiness, TokenStream};
-use serde_json::{json, Value};
-use sqlx::Row;
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-};
 use common::{
     json_body, mock_provider, postgres_test_context, postgres_test_context_with_config,
     sample_scenario, send_empty, send_empty_with_bearer, send_json, send_json_with_bearer,
+};
+use http_body_util::BodyExt;
+use providers::{
+    LlmProvider, LlmRequest, LlmResponse, ProviderCapabilities, ProviderError, ProviderHealth,
+    ProviderReadiness, TokenStream,
+};
+use serde_json::{Value, json};
+use sqlx::Row;
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 use tower::util::ServiceExt;
 
@@ -42,8 +45,13 @@ async fn create_scenario_and_session_persist_initial_world_state() {
         .expect("test context");
     let scenario = sample_scenario();
 
-    let (scenario_status, _) =
-        send_json(&ctx.router, "POST", "/scenarios", serde_json::to_value(&scenario).unwrap()).await;
+    let (scenario_status, _) = send_json(
+        &ctx.router,
+        "POST",
+        "/scenarios",
+        serde_json::to_value(&scenario).unwrap(),
+    )
+    .await;
     assert_eq!(scenario_status, http::StatusCode::OK);
 
     let (session_status, session_body) = send_json(
@@ -66,7 +74,13 @@ async fn create_scenario_and_session_persist_initial_world_state() {
 
     assert_eq!(version, 0);
     assert_eq!(state.0.session_id, session.id);
-    assert!(state.0.facts.iter().any(|fact| fact.visibility == domain::FactVisibility::GmOnly));
+    assert!(
+        state
+            .0
+            .facts
+            .iter()
+            .any(|fact| fact.visibility == domain::FactVisibility::GmOnly)
+    );
 
     ctx.cleanup().await;
 }
@@ -79,7 +93,13 @@ async fn projected_world_state_hides_gm_only_facts() {
         .expect("test context");
     let scenario = sample_scenario();
 
-    send_json(&ctx.router, "POST", "/scenarios", serde_json::to_value(&scenario).unwrap()).await;
+    send_json(
+        &ctx.router,
+        "POST",
+        "/scenarios",
+        serde_json::to_value(&scenario).unwrap(),
+    )
+    .await;
     let (_, session_body) = send_json(
         &ctx.router,
         "POST",
@@ -128,7 +148,13 @@ async fn non_streaming_turn_persists_messages_delta_state_and_events() {
         .expect("test context");
     let scenario = sample_scenario();
 
-    send_json(&ctx.router, "POST", "/scenarios", serde_json::to_value(&scenario).unwrap()).await;
+    send_json(
+        &ctx.router,
+        "POST",
+        "/scenarios",
+        serde_json::to_value(&scenario).unwrap(),
+    )
+    .await;
     let (_, session_body) = send_json(
         &ctx.router,
         "POST",
@@ -150,16 +176,18 @@ async fn non_streaming_turn_persists_messages_delta_state_and_events() {
     assert_eq!(status, http::StatusCode::OK);
     assert_eq!(response["world_state_version"], 1);
 
-    let message_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages WHERE session_id = $1")
-        .bind(session.id)
-        .fetch_one(&ctx.pool)
-        .await
-        .expect("message count");
-    let delta_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM world_state_deltas WHERE session_id = $1")
-        .bind(session.id)
-        .fetch_one(&ctx.pool)
-        .await
-        .expect("delta count");
+    let message_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM messages WHERE session_id = $1")
+            .bind(session.id)
+            .fetch_one(&ctx.pool)
+            .await
+            .expect("message count");
+    let delta_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM world_state_deltas WHERE session_id = $1")
+            .bind(session.id)
+            .fetch_one(&ctx.pool)
+            .await
+            .expect("delta count");
     let event_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM events WHERE session_id = $1")
         .bind(session.id)
         .fetch_one(&ctx.pool)
@@ -213,7 +241,13 @@ async fn second_turn_uses_updated_state() {
         .expect("test context");
     let scenario = sample_scenario();
 
-    send_json(&ctx.router, "POST", "/scenarios", serde_json::to_value(&scenario).unwrap()).await;
+    send_json(
+        &ctx.router,
+        "POST",
+        "/scenarios",
+        serde_json::to_value(&scenario).unwrap(),
+    )
+    .await;
     let (_, session_body) = send_json(
         &ctx.router,
         "POST",
@@ -271,7 +305,13 @@ async fn streaming_turn_emits_tokens_then_final_and_persists_after_final() {
     .expect("test context");
     let scenario = sample_scenario();
 
-    send_json(&ctx.router, "POST", "/scenarios", serde_json::to_value(&scenario).unwrap()).await;
+    send_json(
+        &ctx.router,
+        "POST",
+        "/scenarios",
+        serde_json::to_value(&scenario).unwrap(),
+    )
+    .await;
     let (_, session_body) = send_json(
         &ctx.router,
         "POST",
@@ -313,10 +353,18 @@ async fn streaming_turn_emits_tokens_then_final_and_persists_after_final() {
 #[tokio::test]
 #[ignore = "requires docker daemon via testcontainers"]
 async fn concurrent_turn_returns_409() {
-    let ctx = postgres_test_context(Arc::new(BlockingProvider::new())).await.expect("test context");
+    let ctx = postgres_test_context(Arc::new(BlockingProvider::new()))
+        .await
+        .expect("test context");
     let scenario = sample_scenario();
 
-    send_json(&ctx.router, "POST", "/scenarios", serde_json::to_value(&scenario).unwrap()).await;
+    send_json(
+        &ctx.router,
+        "POST",
+        "/scenarios",
+        serde_json::to_value(&scenario).unwrap(),
+    )
+    .await;
     let (_, session_body) = send_json(
         &ctx.router,
         "POST",
@@ -332,7 +380,9 @@ async fn concurrent_turn_returns_409() {
             .method("POST")
             .uri(format!("/sessions/{}/turn", session.id))
             .header(http::header::CONTENT_TYPE, "application/json")
-            .body(Body::from(json!({ "input": "First turn", "mode": "action" }).to_string()))
+            .body(Body::from(
+                json!({ "input": "First turn", "mode": "action" }).to_string(),
+            ))
             .expect("request");
         router.oneshot(request).await.expect("response")
     });
@@ -427,7 +477,13 @@ async fn delta_with_unknown_npc_id_returns_422() {
         .expect("test context");
     let scenario = sample_scenario();
 
-    send_json(&ctx.router, "POST", "/scenarios", serde_json::to_value(&scenario).unwrap()).await;
+    send_json(
+        &ctx.router,
+        "POST",
+        "/scenarios",
+        serde_json::to_value(&scenario).unwrap(),
+    )
+    .await;
     let (_, session_body) = send_json(
         &ctx.router,
         "POST",
@@ -491,11 +547,17 @@ async fn dead_npc_attitude_change_returns_422() {
         mock_provider([kill_turn.to_string(), invalid_turn.to_string()]),
         config,
     )
-        .await
-        .expect("test context");
+    .await
+    .expect("test context");
     let scenario = sample_scenario();
 
-    send_json(&ctx.router, "POST", "/scenarios", serde_json::to_value(&scenario).unwrap()).await;
+    send_json(
+        &ctx.router,
+        "POST",
+        "/scenarios",
+        serde_json::to_value(&scenario).unwrap(),
+    )
+    .await;
     let (_, session_body) = send_json(
         &ctx.router,
         "POST",
@@ -527,7 +589,11 @@ async fn dead_npc_attitude_change_returns_422() {
         let v: Value = json_body(&body);
         serde_json::from_value(v["world_state"].clone()).expect("world state")
     };
-    let examiner = world_state.npcs.iter().find(|n| n.npc_id == "examiner").expect("examiner");
+    let examiner = world_state
+        .npcs
+        .iter()
+        .find(|n| n.npc_id == "examiner")
+        .expect("examiner");
     assert_eq!(examiner.status, NpcStatus::Dead);
 
     // Second turn: try to change dead NPC's attitude — must be rejected.
@@ -552,7 +618,13 @@ async fn provider_failure_returns_502() {
         .expect("test context");
     let scenario = sample_scenario();
 
-    send_json(&ctx.router, "POST", "/scenarios", serde_json::to_value(&scenario).unwrap()).await;
+    send_json(
+        &ctx.router,
+        "POST",
+        "/scenarios",
+        serde_json::to_value(&scenario).unwrap(),
+    )
+    .await;
     let (_, session_body) = send_json(
         &ctx.router,
         "POST",
@@ -595,7 +667,13 @@ async fn debug_turn_returns_applied_delta() {
         .expect("test context");
     let scenario = sample_scenario();
 
-    send_json(&ctx.router, "POST", "/scenarios", serde_json::to_value(&scenario).unwrap()).await;
+    send_json(
+        &ctx.router,
+        "POST",
+        "/scenarios",
+        serde_json::to_value(&scenario).unwrap(),
+    )
+    .await;
     let (_, session_body) = send_json(
         &ctx.router,
         "POST",
