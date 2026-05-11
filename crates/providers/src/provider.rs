@@ -14,7 +14,7 @@ pub trait LlmProvider: Send + Sync {
     async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, ProviderError>;
     async fn stream(&self, request: LlmRequest) -> Result<TokenStream, ProviderError>;
     async fn list_models(&self) -> Result<Vec<ProviderModel>, ProviderError> {
-        Err(ProviderError::Unsupported("list_models"))
+        Err(ProviderError::Unsupported("list_models".into()))
     }
     async fn take_stream_metadata(&self) -> Option<StreamMetadata> {
         None
@@ -110,8 +110,11 @@ impl LlmMessageRole {
 pub struct LlmResponse {
     pub text: String,
     pub raw_json: Option<serde_json::Value>,
+    #[serde(default)]
     pub usage: Option<TokenUsage>,
+    #[serde(default)]
     pub cost_usd: Option<f64>,
+    #[serde(default)]
     pub generation_id: Option<String>,
 }
 
@@ -141,6 +144,7 @@ pub struct StreamMetadata {
     pub usage: Option<TokenUsage>,
     pub cost_usd: Option<f64>,
     pub generation_id: Option<String>,
+    #[serde(default)]
     pub extra: serde_json::Value,
 }
 
@@ -163,7 +167,7 @@ pub enum ProviderError {
     #[error("mock provider has no queued response")]
     NoMockResponse,
     #[error("provider capability not supported: {0}")]
-    Unsupported(&'static str),
+    Unsupported(String),
 }
 
 /// Returns `true` for errors that are safe to retry (transport failures, timeouts, rate limits,
@@ -226,6 +230,6 @@ mod tests {
             body: String::new()
         }));
         assert!(!is_retryable(&ProviderError::NoMockResponse));
-        assert!(!is_retryable(&ProviderError::Unsupported("list_models")));
+        assert!(!is_retryable(&ProviderError::Unsupported("list_models".into())));
     }
 }
