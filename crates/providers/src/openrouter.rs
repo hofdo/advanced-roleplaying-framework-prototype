@@ -163,12 +163,13 @@ impl OpenRouterProvider {
             .pointer("/id")
             .and_then(|v| v.as_str())
             .map(str::to_owned);
+        let cost_usd = raw.pointer("/usage/cost").and_then(|v| v.as_f64());
 
         Ok(LlmResponse {
             text,
             raw_json: Some(raw),
             usage,
-            cost_usd: None,
+            cost_usd,
             generation_id,
         })
     }
@@ -190,9 +191,12 @@ fn parse_usage_from_value(usage: &Value) -> Option<TokenUsage> {
     })
 }
 
-fn parse_usage_from_chunk(value: &Value) -> Option<TokenUsage> {
-    let usage = value.pointer("/usage")?;
-    parse_usage_from_value(usage)
+fn parse_usage_from_chunk(usage: &Value) -> Option<TokenUsage> {
+    Some(TokenUsage {
+        prompt_tokens: usage.get("prompt_tokens")?.as_u64()? as u32,
+        completion_tokens: usage.get("completion_tokens")?.as_u64()? as u32,
+        total_tokens: usage.get("total_tokens")?.as_u64()? as u32,
+    })
 }
 
 #[async_trait]
@@ -263,43 +267,29 @@ impl LlmProvider for OpenRouterProvider {
                     let value: serde_json::Value = serde_json::from_str(data)
                         .map_err(|e| ProviderError::MalformedResponse(e.to_string()))?;
 
-                    // Check if this is a trailing usage chunk (choices absent or empty, usage present)
-                    let choices = value.pointer("/choices");
-                    let has_content_choice = choices
-                        .and_then(|c| c.as_array())
-                        .and_then(|arr| arr.first())
-                        .and_then(|c| c.pointer("/delta/content"))
-                        .is_some();
+                    // Extract token from choices[0].delta.content if non-empty — yield it
+                    if let Some(content) = value
+                        .pointer("/choices/0/delta/content")
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty())
+                    {
+                        yield content.to_owned();
+                    }
 
-                    let is_usage_chunk = if has_content_choice {
-                        false
-                    } else {
-                        // Either no choices key, or choices array is empty, and usage is present
-                        let no_choices = choices.map_or(true, |c| {
-                            c.as_array().map_or(true, |arr| arr.is_empty())
-                        });
-                        no_choices && value.pointer("/usage").is_some()
-                    };
-
-                    if is_usage_chunk {
-                        let usage = parse_usage_from_chunk(&value);
+                    // Capture metadata if usage field is present on this chunk
+                    if let Some(usage_val) = value.get("usage") {
+                        let usage = parse_usage_from_chunk(usage_val);
                         let generation_id = value
-                            .pointer("/id")
+                            .get("id")
                             .and_then(|v| v.as_str())
                             .map(str::to_owned);
+                        let cost_usd = usage_val.get("cost").and_then(|v| v.as_f64());
                         *self_meta.lock().unwrap() = Some(StreamMetadata {
                             usage,
-                            cost_usd: None,
+                            cost_usd,
                             generation_id,
                             extra: serde_json::Value::Null,
                         });
-                    } else if has_content_choice {
-                        let token = value
-                            .pointer("/choices/0/delta/content")
-                            .and_then(|v| v.as_str())
-                            .map(str::to_owned)
-                            .unwrap_or_default();
-                        yield token;
                     }
                 }
             }

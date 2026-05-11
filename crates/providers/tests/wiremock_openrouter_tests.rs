@@ -61,19 +61,6 @@ fn provider_with_extras(base_url: &str, extras: OpenRouterExtras) -> OpenRouterP
     .expect("provider")
 }
 
-// ── SSE helpers ──────────────────────────────────────────────────────────────
-
-fn sse_chunk(token: &str) -> String {
-    let body = json!({
-        "choices": [{"delta": {"content": token}}]
-    });
-    format!("data: {}\n\n", body)
-}
-
-fn sse_done() -> &'static str {
-    "data: [DONE]\n\n"
-}
-
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -133,12 +120,11 @@ async fn generate_sends_provider_routing_in_body() {
 async fn stream_captures_trailing_usage_chunk() {
     let server = MockServer::start().await;
 
-    let body = format!(
-        "{}{}{}{}",
-        sse_chunk("hello"),
-        sse_chunk(" world"),
-        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7}}\n\n",
-        sse_done()
+    let body = concat!(
+        "data: {\"id\":\"gen-abc\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\",\"role\":\"assistant\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"id\":\"gen-abc\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" world\",\"role\":\"assistant\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"id\":\"gen-abc\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\",\"role\":\"assistant\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7,\"cost\":0.0000021}}\n\n",
+        "data: [DONE]\n\n",
     );
 
     Mock::given(method("POST"))
@@ -172,16 +158,21 @@ async fn stream_captures_trailing_usage_chunk() {
     assert_eq!(usage.total_tokens, 7);
     assert_eq!(usage.prompt_tokens, 5);
     assert_eq!(usage.completion_tokens, 2);
+    assert_eq!(
+        meta.cost_usd,
+        Some(0.0000021),
+        "expected cost_usd to be captured"
+    );
 }
 
 #[tokio::test]
-async fn stream_captures_usage_chunk_without_choices_key() {
+async fn stream_captures_generation_id_from_chunk() {
     let server = MockServer::start().await;
 
-    let body = format!(
-        "{}{}",
-        "data: {\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7},\"id\":\"gen-abc123\"}\n\n",
-        sse_done()
+    let body = concat!(
+        "data: {\"id\":\"gen-abc123\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\",\"role\":\"assistant\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"id\":\"gen-abc123\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\",\"role\":\"assistant\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":1,\"total_tokens\":6,\"cost\":0.0000012}}\n\n",
+        "data: [DONE]\n\n",
     );
 
     Mock::given(method("POST"))
@@ -201,16 +192,14 @@ async fn stream_captures_usage_chunk_without_choices_key() {
         .collect()
         .await;
 
-    assert!(tokens.is_empty(), "expected no content tokens, got: {:?}", tokens);
+    assert_eq!(tokens, vec!["hi".to_owned()], "unexpected tokens: {:?}", tokens);
 
     let meta = provider.take_stream_metadata();
     assert!(meta.is_some(), "expected metadata to be captured");
     let meta = meta.unwrap();
-    let usage = meta.usage.expect("expected usage");
-    assert_eq!(usage.total_tokens, 7);
     assert_eq!(
         meta.generation_id,
-        Some("gen-abc123".into()),
+        Some("gen-abc123".to_owned()),
         "expected generation_id to be captured"
     );
 }
