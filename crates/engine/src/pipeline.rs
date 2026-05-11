@@ -160,7 +160,7 @@ pub enum PipelineEventKind {
 }
 
 impl PipelineEventKind {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::TurnStarted => "turn_started",
             Self::TurnLockAcquired => "turn_lock_acquired",
