@@ -13,6 +13,12 @@ pub trait LlmProvider: Send + Sync {
     fn capabilities(&self) -> ProviderCapabilities;
     async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, ProviderError>;
     async fn stream(&self, request: LlmRequest) -> Result<TokenStream, ProviderError>;
+    async fn list_models(&self) -> Result<Vec<ProviderModel>, ProviderError> {
+        Err(ProviderError::Unsupported("list_models"))
+    }
+    async fn take_stream_metadata(&self) -> Option<StreamMetadata> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -39,6 +45,14 @@ pub struct ProviderCapabilities {
     pub request_timeout_seconds: u64,
     pub stream_idle_timeout_seconds: u64,
     pub max_retries: u8,
+    #[serde(default)]
+    pub supports_usage_reporting: bool,
+    #[serde(default)]
+    pub supports_cost_reporting: bool,
+    #[serde(default)]
+    pub supports_model_listing: bool,
+    #[serde(default)]
+    pub supports_provider_routing: bool,
 }
 
 impl Default for ProviderCapabilities {
@@ -52,6 +66,10 @@ impl Default for ProviderCapabilities {
             request_timeout_seconds: 120,
             stream_idle_timeout_seconds: 30,
             max_retries: 1,
+            supports_usage_reporting: false,
+            supports_cost_reporting: false,
+            supports_model_listing: false,
+            supports_provider_routing: false,
         }
     }
 }
@@ -92,6 +110,38 @@ impl LlmMessageRole {
 pub struct LlmResponse {
     pub text: String,
     pub raw_json: Option<serde_json::Value>,
+    pub usage: Option<TokenUsage>,
+    pub cost_usd: Option<f64>,
+    pub generation_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TokenUsage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ModelPricing {
+    pub prompt_per_token: f64,
+    pub completion_per_token: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProviderModel {
+    pub id: String,
+    pub name: Option<String>,
+    pub context_length: Option<u32>,
+    pub pricing: Option<ModelPricing>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StreamMetadata {
+    pub usage: Option<TokenUsage>,
+    pub cost_usd: Option<f64>,
+    pub generation_id: Option<String>,
+    pub extra: serde_json::Value,
 }
 
 #[derive(Debug, Error)]
@@ -112,6 +162,8 @@ pub enum ProviderError {
     StreamingUnsupported,
     #[error("mock provider has no queued response")]
     NoMockResponse,
+    #[error("provider capability not supported: {0}")]
+    Unsupported(&'static str),
 }
 
 /// Returns `true` for errors that are safe to retry (transport failures, timeouts, rate limits,
@@ -127,6 +179,7 @@ pub fn is_retryable(error: &ProviderError) -> bool {
         ProviderError::MalformedResponse(_) => false,
         ProviderError::StreamingUnsupported => false,
         ProviderError::NoMockResponse => false,
+        ProviderError::Unsupported(_) => false,
     }
 }
 
@@ -173,5 +226,6 @@ mod tests {
             body: String::new()
         }));
         assert!(!is_retryable(&ProviderError::NoMockResponse));
+        assert!(!is_retryable(&ProviderError::Unsupported("list_models")));
     }
 }

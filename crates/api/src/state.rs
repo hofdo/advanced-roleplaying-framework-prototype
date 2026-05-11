@@ -49,6 +49,10 @@ impl AppState {
                 request_timeout_seconds: provider_config.request_timeout_seconds,
                 stream_idle_timeout_seconds: provider_config.stream_idle_timeout_seconds,
                 max_retries: provider_config.max_retries,
+                supports_usage_reporting: false,
+                supports_cost_reporting: false,
+                supports_model_listing: false,
+                supports_provider_routing: false,
             },
         )
         .map_err(|error| anyhow::anyhow!(error.to_string()))?);
@@ -115,6 +119,10 @@ impl AppState {
                 request_timeout_seconds: provider_config.request_timeout_seconds,
                 stream_idle_timeout_seconds: provider_config.stream_idle_timeout_seconds,
                 max_retries: provider_config.max_retries,
+                supports_usage_reporting: false,
+                supports_cost_reporting: false,
+                supports_model_listing: false,
+                supports_provider_routing: false,
             },
         )
         .map_err(|error| anyhow::anyhow!(error.to_string()))?);

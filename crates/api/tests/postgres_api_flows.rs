@@ -391,6 +391,9 @@ impl LlmProvider for BlockingProvider {
         Ok(LlmResponse {
             text: r#"{"player_response":"blocked","world_state_delta":{"facts_to_add":[],"npc_changes":[],"faction_changes":[],"quest_changes":[],"clock_changes":[],"relationship_changes":[],"location_change":null,"event_log_entries":[]}}"#.into(),
             raw_json: None,
+            usage: None,
+            cost_usd: None,
+            generation_id: None,
         })
     }
 

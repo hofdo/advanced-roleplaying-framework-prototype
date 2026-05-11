@@ -118,6 +118,9 @@ impl OpenAiCompatibleProvider {
         Ok(LlmResponse {
             text,
             raw_json: Some(raw),
+            usage: None,
+            cost_usd: None,
+            generation_id: None,
         })
     }
 

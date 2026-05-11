@@ -73,6 +73,9 @@ impl LlmProvider for MockProvider {
         Ok(LlmResponse {
             text: self.pop_response()?,
             raw_json: None,
+            usage: None,
+            cost_usd: None,
+            generation_id: None,
         })
     }
 
