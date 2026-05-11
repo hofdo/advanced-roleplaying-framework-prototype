@@ -737,7 +737,6 @@ struct RegisterProviderRequest {
 #[derive(Debug, Deserialize)]
 struct SetProviderRequest {
     provider_id: Option<Uuid>,
-    provider_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

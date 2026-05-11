@@ -1,11 +1,11 @@
 mod common;
+#[path = "common/memory.rs"]
+mod common_memory;
 
 use api::{ApiStore, AppState, app_router};
 use async_trait::async_trait;
-use common::{
-    json_body, memory_test_context, memory_test_context_with_config, mock_provider,
-    sample_scenario, send_empty, send_empty_with_bearer, send_json,
-};
+use common::{json_body, mock_provider, sample_scenario, send_empty, send_empty_with_bearer, send_json};
+use common_memory::{memory_test_context, memory_test_context_with_config};
 use engine::InMemorySessionTurnLock;
 use http::StatusCode;
 use providers::{

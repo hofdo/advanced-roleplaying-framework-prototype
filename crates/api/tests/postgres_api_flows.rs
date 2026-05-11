@@ -1,9 +1,11 @@
 mod common;
+#[path = "common/postgres.rs"]
+mod common_postgres;
 
 use axum::{body::Body, http::Request};
-use common::{
-    json_body, mock_provider, postgres_test_context, postgres_test_context_with_config,
-    sample_scenario, send_empty, send_empty_with_bearer, send_json, send_json_with_bearer,
+use common::{json_body, mock_provider, sample_scenario, send_empty, send_empty_with_bearer, send_json};
+use common_postgres::{
+    postgres_test_context, postgres_test_context_with_config, send_json_with_bearer,
 };
 use http_body_util::BodyExt;
 use providers::{
@@ -16,12 +18,13 @@ use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
+use tokio::time::{Duration, sleep};
 use tower::util::ServiceExt;
 
 const ADMIN_TOKEN: &str = "test-admin-token";
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn health_reports_postgres_ok() {
     let ctx = postgres_test_context(mock_provider(Vec::<String>::new()))
         .await
@@ -38,7 +41,7 @@ async fn health_reports_postgres_ok() {
 }
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn create_scenario_and_session_persist_initial_world_state() {
     let ctx = postgres_test_context(mock_provider(Vec::<String>::new()))
         .await
@@ -86,7 +89,7 @@ async fn create_scenario_and_session_persist_initial_world_state() {
 }
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn projected_world_state_hides_gm_only_facts() {
     let ctx = postgres_test_context(mock_provider(Vec::<String>::new()))
         .await
@@ -124,7 +127,7 @@ async fn projected_world_state_hides_gm_only_facts() {
 }
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn non_streaming_turn_persists_messages_delta_state_and_events() {
     let raw = r#"{
         "player_response": "The guildhall falls silent as examiners shield nearby civilians.",
@@ -188,11 +191,20 @@ async fn non_streaming_turn_persists_messages_delta_state_and_events() {
             .fetch_one(&ctx.pool)
             .await
             .expect("delta count");
-    let event_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM events WHERE session_id = $1")
-        .bind(session.id)
-        .fetch_one(&ctx.pool)
-        .await
-        .expect("event count");
+    let world_event_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM events WHERE session_id = $1 AND event_type = 'world_event'",
+    )
+    .bind(session.id)
+    .fetch_one(&ctx.pool)
+    .await
+    .expect("world event count");
+    let turn_finished_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM events WHERE session_id = $1 AND event_type = 'turn_finished'",
+    )
+    .bind(session.id)
+    .fetch_one(&ctx.pool)
+    .await
+    .expect("turn_finished event count");
     let version: i64 = sqlx::query_scalar("SELECT version FROM world_states WHERE session_id = $1")
         .bind(session.id)
         .fetch_one(&ctx.pool)
@@ -201,14 +213,15 @@ async fn non_streaming_turn_persists_messages_delta_state_and_events() {
 
     assert_eq!(message_count, 2);
     assert_eq!(delta_count, 1);
-    assert_eq!(event_count, 1);
+    assert_eq!(world_event_count, 1);
+    assert_eq!(turn_finished_count, 1);
     assert_eq!(version, 1);
 
     ctx.cleanup().await;
 }
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn second_turn_uses_updated_state() {
     let turn_one = r#"{
         "player_response": "The guild recoils from the mana surge.",
@@ -257,20 +270,47 @@ async fn second_turn_uses_updated_state() {
     .await;
     let session: persistence::SessionRecord = json_body(&session_body);
 
-    send_json(
+    let (first_status, first_body) = send_json(
         &ctx.router,
         "POST",
         &format!("/sessions/{}/turn", session.id),
         json!({ "input": "First turn", "mode": "action" }),
     )
     .await;
-    let (_, body) = send_json(
-        &ctx.router,
-        "POST",
-        &format!("/sessions/{}/turn", session.id),
-        json!({ "input": "Second turn", "mode": "dialogue" }),
-    )
-    .await;
+    assert_eq!(
+        first_status,
+        http::StatusCode::OK,
+        "first turn failed with body: {}",
+        String::from_utf8_lossy(&first_body)
+    );
+
+    let second_path = format!("/sessions/{}/turn", session.id);
+    let (second_status, body) = {
+        let mut last = None;
+        for _ in 0..20 {
+            let attempt = send_json(
+                &ctx.router,
+                "POST",
+                &second_path,
+                json!({ "input": "Second turn", "mode": "dialogue" }),
+            )
+            .await;
+            if attempt.0 == http::StatusCode::CONFLICT {
+                last = Some(attempt);
+                sleep(Duration::from_millis(50)).await;
+                continue;
+            }
+            last = Some(attempt);
+            break;
+        }
+        last.expect("at least one second-turn attempt")
+    };
+    assert_eq!(
+        second_status,
+        http::StatusCode::OK,
+        "second turn failed with body: {}",
+        String::from_utf8_lossy(&body)
+    );
     let response: Value = json_body(&body);
     let version: i64 = sqlx::query_scalar("SELECT version FROM world_states WHERE session_id = $1")
         .bind(session.id)
@@ -285,7 +325,7 @@ async fn second_turn_uses_updated_state() {
 }
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn streaming_turn_emits_tokens_then_final_and_persists_after_final() {
     let delta = r#"{
         "facts_to_add": [],
@@ -351,7 +391,7 @@ async fn streaming_turn_emits_tokens_then_final_and_persists_after_final() {
 }
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn concurrent_turn_returns_409() {
     let ctx = postgres_test_context(Arc::new(BlockingProvider::new()))
         .await
@@ -457,7 +497,7 @@ impl LlmProvider for BlockingProvider {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn delta_with_unknown_npc_id_returns_422() {
     let bad_delta = r#"{
         "player_response": "The examiner nods.",
@@ -506,7 +546,7 @@ async fn delta_with_unknown_npc_id_returns_422() {
 }
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn dead_npc_attitude_change_returns_422() {
     use domain::{NpcStatus, WorldState};
 
@@ -610,7 +650,7 @@ async fn dead_npc_attitude_change_returns_422() {
 }
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn provider_failure_returns_502() {
     // Empty provider queue → NoMockResponse → maps to ProviderError → 502 Bad Gateway.
     let ctx = postgres_test_context(mock_provider(Vec::<String>::new()))
@@ -647,7 +687,7 @@ async fn provider_failure_returns_502() {
 }
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn debug_turn_returns_applied_delta() {
     let raw = r#"{
         "player_response": "The examiner nods cautiously.",
@@ -662,7 +702,11 @@ async fn debug_turn_returns_applied_delta() {
             "event_log_entries": []
         }
     }"#;
-    let ctx = postgres_test_context(mock_provider([raw.to_string()]))
+    let mut config = shared::AppConfig::default();
+    config.storage.backend = shared::StorageBackend::Postgres;
+    config.admin.enabled = true;
+    config.admin.token = Some(ADMIN_TOKEN.into());
+    let ctx = postgres_test_context_with_config(mock_provider([raw.to_string()]), config)
         .await
         .expect("test context");
     let scenario = sample_scenario();
@@ -691,9 +735,14 @@ async fn debug_turn_returns_applied_delta() {
         json!({ "input": "I greet the examiner.", "mode": "dialogue" }),
     )
     .await;
+    assert_eq!(
+        status,
+        http::StatusCode::OK,
+        "debug turn failed with body: {}",
+        String::from_utf8_lossy(&body)
+    );
     let response: Value = json_body(&body);
 
-    assert_eq!(status, http::StatusCode::OK);
     assert!(
         response.get("applied_delta").is_some(),
         "debug response must contain applied_delta"
@@ -797,7 +846,7 @@ fn export_projection_strips_gm_only_facts() {
 /// 2. The /export response JSON has no `raw_provider_output` field at all.
 /// 3. The /export response uses `visible_state` (not `world_state`).
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn turn_response_and_export_do_not_leak_raw_provider_output() {
     let raw_turn = r#"{
         "player_response": "The examiner nods cautiously.",
@@ -884,7 +933,7 @@ async fn turn_response_and_export_do_not_leak_raw_provider_output() {
 }
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn raw_provider_output_remains_null_when_storage_disabled() {
     let raw_turn = r#"{
         "player_response": "The examiner nods cautiously.",
@@ -948,7 +997,7 @@ async fn raw_provider_output_remains_null_when_storage_disabled() {
 }
 
 #[tokio::test]
-#[ignore = "requires docker daemon via testcontainers"]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn raw_provider_output_is_persisted_when_storage_enabled() {
     let raw_turn = r#"{
         "player_response": "The examiner nods cautiously.",

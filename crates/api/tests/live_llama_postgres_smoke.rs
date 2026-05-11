@@ -1,7 +1,12 @@
+#[allow(dead_code)]
 mod common;
+#[allow(dead_code)]
+#[path = "common/postgres.rs"]
+mod common_postgres;
 
 use api::build_provider_from_config;
-use common::{json_body, postgres_test_context_with_config, send_empty, send_json};
+use common::{json_body, send_empty, send_json};
+use common_postgres::postgres_test_context_with_config;
 use http::StatusCode;
 use providers::{LlmProvider, ProviderModel};
 use serde_json::{Value, json};
