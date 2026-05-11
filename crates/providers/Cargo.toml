@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+anyhow.workspace = true
 async-stream.workspace = true
 async-trait.workspace = true
 bytes.workspace = true
@@ -12,6 +13,7 @@ futures.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+shared.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 
