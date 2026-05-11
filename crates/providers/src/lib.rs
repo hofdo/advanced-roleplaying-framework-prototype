@@ -2,6 +2,7 @@ pub mod mock;
 pub mod openai_compatible;
 pub mod provider;
 pub mod secrets;
+pub(crate) mod http;
 
 pub use mock::*;
 pub use openai_compatible::*;

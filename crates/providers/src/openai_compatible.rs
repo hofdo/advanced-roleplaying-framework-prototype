@@ -1,5 +1,5 @@
 use crate::{
-    is_retryable, LlmProvider, LlmRequest, LlmResponse, ProviderCapabilities, ProviderError,
+    http, LlmProvider, LlmRequest, LlmResponse, ProviderCapabilities, ProviderError,
     ProviderHealth, ProviderReadiness, TokenStream,
 };
 use async_stream::try_stream;
@@ -82,7 +82,7 @@ impl OpenAiCompatibleProvider {
         let response = builder
             .send()
             .await
-            .map_err(|error| map_reqwest_error(&error))?;
+            .map_err(|error| http::map_reqwest_error(&error))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -182,20 +182,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
     }
 
     async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, ProviderError> {
-        let max_attempts = u32::from(self.capabilities.max_retries) + 1;
-        for attempt in 0..max_attempts {
-            match self.try_generate(&request).await {
-                Ok(response) => return Ok(response),
-                Err(error) if !is_retryable(&error) => return Err(error),
-                Err(error) if attempt + 1 == max_attempts => return Err(error),
-                Err(_) => {
-                    let delay_ms = std::cmp::min(100 * (1u64 << attempt), 2000);
-                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-                }
-            }
-        }
-        // Unreachable: the loop always returns or falls into the Err branch on the last attempt.
-        unreachable!("retry loop exhausted without returning")
+        http::with_retries(self.capabilities.max_retries, || self.try_generate(&request)).await
     }
 
     async fn stream(&self, request: LlmRequest) -> Result<TokenStream, ProviderError> {
@@ -203,65 +190,34 @@ impl LlmProvider for OpenAiCompatibleProvider {
             return Err(ProviderError::StreamingUnsupported);
         }
 
-        let max_attempts = u32::from(self.capabilities.max_retries) + 1;
-        let mut last_error = ProviderError::Transport("no attempt made".into());
-        for attempt in 0..max_attempts {
-            match self.try_stream_response(&request).await {
-                Ok(response) => {
-                    let stream = response.bytes_stream();
-                    let idle_timeout = Duration::from_secs(
-                        self.capabilities.stream_idle_timeout_seconds,
-                    );
-                    return Ok(Box::pin(try_stream! {
-                        futures::pin_mut!(stream);
-                        loop {
-                            let chunk = timeout(idle_timeout, stream.next())
-                                .await
-                                .map_err(|_| ProviderError::StreamIdleTimeout)?;
-                            let Some(chunk) = chunk else {
-                                break;
-                            };
-                            let bytes = chunk.map_err(|error| map_reqwest_error(&error))?;
-                            let text = String::from_utf8_lossy(&bytes);
-                            for line in text.lines() {
-                                let Some(data) = line.strip_prefix("data: ") else {
-                                    continue;
-                                };
-                                if data.trim() == "[DONE]" {
-                                    continue;
-                                }
-                                let value: Value = serde_json::from_str(data)
-                                    .map_err(|error| ProviderError::MalformedResponse(error.to_string()))?;
-                                if let Some(token) = value
-                                    .pointer("/choices/0/delta/content")
-                                    .and_then(Value::as_str)
-                                {
-                                    yield token.to_owned();
-                                }
-                            }
-                        }
-                    }));
-                }
-                Err(error) if !is_retryable(&error) => return Err(error),
-                Err(error) if attempt + 1 == max_attempts => return Err(error),
-                Err(error) => {
-                    last_error = error;
-                    let delay_ms = std::cmp::min(100 * (1u64 << attempt), 2000);
-                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+        let response = http::with_retries(self.capabilities.max_retries, || {
+            self.try_stream_response(&request)
+        })
+        .await?;
+
+        let stream = response.bytes_stream();
+        let idle_timeout = Duration::from_secs(self.capabilities.stream_idle_timeout_seconds);
+        Ok(Box::pin(try_stream! {
+            futures::pin_mut!(stream);
+            loop {
+                let chunk = timeout(idle_timeout, stream.next())
+                    .await
+                    .map_err(|_| ProviderError::StreamIdleTimeout)?;
+                let Some(chunk) = chunk else {
+                    break;
+                };
+                let bytes = chunk.map_err(|error| http::map_reqwest_error(&error))?;
+                let text = String::from_utf8_lossy(&bytes);
+                for line in text.lines() {
+                    let Some(data) = line.strip_prefix("data: ") else {
+                        continue;
+                    };
+                    if let Some(token) = http::parse_sse_data_line(data)? {
+                        yield token;
+                    }
                 }
             }
-        }
-        Err(last_error)
-    }
-}
-
-fn map_reqwest_error(error: &reqwest::Error) -> ProviderError {
-    if error.is_timeout() {
-        ProviderError::Timeout
-    } else if error.status() == Some(StatusCode::REQUEST_TIMEOUT) {
-        ProviderError::Timeout
-    } else {
-        ProviderError::Transport(error.to_string())
+        }))
     }
 }
 
@@ -292,7 +248,7 @@ struct OpenAiResponseFormat {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{LlmMessage, LlmMessageRole};
+    use crate::{is_retryable, LlmMessage, LlmMessageRole};
 
     #[tokio::test]
     async fn health_returns_ok_true_when_base_url_set() {
