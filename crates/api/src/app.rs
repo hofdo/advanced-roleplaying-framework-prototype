@@ -562,6 +562,9 @@ async fn turn_stream(
             }
         }
 
+        let stream_meta = resolved_provider.take_stream_metadata();
+        let stream_usage = stream_meta.as_ref().and_then(|m| m.usage.clone());
+
         // Strip hidden reasoning from the accumulated tokens, then call the
         // provider a second time to extract a typed WorldStateDelta from the
         // narration (streaming path can't emit JSON inline).
@@ -604,7 +607,19 @@ async fn turn_stream(
             "delta_raw_output": delta_response
                 .raw_json
                 .unwrap_or_else(|| serde_json::Value::String(delta_response.text)),
+            "provider_usage": stream_meta.as_ref().and_then(|m| m.usage.as_ref()),
+            "provider_cost_usd": stream_meta.as_ref().and_then(|m| m.cost_usd),
+            "generation_id": stream_meta.as_ref().and_then(|m| m.generation_id.as_ref()),
         }));
+        if let Some(ref meta) = stream_meta {
+            let _ = pipeline.store
+                .persist_pipeline_event(
+                    session_id,
+                    "provider_usage_captured",
+                    serde_json::json!({ "usage": meta.usage, "cost_usd": meta.cost_usd }).to_string(),
+                )
+                .await;
+        }
         let _ = pipeline.store
             .persist_pipeline_event(session_id, "delta_applied", "delta_applied".into())
             .await;
@@ -646,6 +661,7 @@ async fn turn_stream(
                 delta_applied: true,
                 world_state_version,
                 frontend_state_patch,
+                usage: stream_usage,
             })
             .expect("final event serializes"));
     };
@@ -777,6 +793,7 @@ struct StreamFinalEvent {
     delta_applied: bool,
     world_state_version: i64,
     frontend_state_patch: domain::FrontendStatePatch,
+    usage: Option<providers::TokenUsage>,
 }
 
 #[derive(Debug, Serialize)]
