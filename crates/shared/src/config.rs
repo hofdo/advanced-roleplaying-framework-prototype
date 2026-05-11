@@ -2,7 +2,7 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::{fs, net::Ipv4Addr, path::Path, str::FromStr};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AppConfig {
     pub server: ServerConfig,
     pub database: DatabaseConfig,
@@ -40,6 +40,15 @@ impl AppConfig {
         }
         if let Ok(api_key) = std::env::var("LLM_API_KEY") {
             config.provider.default.api_key = Some(api_key);
+        }
+        if let Ok(t) = std::env::var("LLM_PROVIDER_TYPE") {
+            config.provider.default.provider_type = t;
+        }
+        if let Ok(r) = std::env::var("LLM_HTTP_REFERER") {
+            config.provider.default.http_referer = Some(r);
+        }
+        if let Ok(t) = std::env::var("LLM_X_TITLE") {
+            config.provider.default.x_title = Some(t);
         }
         if let Ok(enabled) = std::env::var("ENABLE_ADMIN_ROUTES") {
             config.admin.enabled = parse_bool_env(&enabled)
@@ -97,6 +106,10 @@ impl Default for AppConfig {
                     request_timeout_seconds: 120,
                     stream_idle_timeout_seconds: 30,
                     max_retries: 1,
+                    http_referer: None,
+                    x_title: None,
+                    provider_routing: None,
+                    include_usage: true,
                 },
             },
             admin: AdminConfig {
@@ -149,7 +162,7 @@ impl FromStr for StorageBackend {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProviderSection {
     pub default: ProviderConfig,
 }
@@ -160,7 +173,7 @@ pub struct AdminConfig {
     pub token: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProviderConfig {
     pub name: String,
     pub provider_type: String,
@@ -173,12 +186,24 @@ pub struct ProviderConfig {
     pub request_timeout_seconds: u64,
     pub stream_idle_timeout_seconds: u64,
     pub max_retries: u8,
+    #[serde(default)]
+    pub http_referer: Option<String>,
+    #[serde(default)]
+    pub x_title: Option<String>,
+    #[serde(default)]
+    pub provider_routing: Option<serde_json::Value>,
+    #[serde(default = "default_include_usage")]
+    pub include_usage: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DebugConfig {
     pub store_raw_provider_output: bool,
     pub allow_debug_state: bool,
+}
+
+fn default_include_usage() -> bool {
+    true
 }
 
 fn parse_bool_env(value: &str) -> anyhow::Result<bool> {
