@@ -157,6 +157,7 @@ pub enum PipelineEventKind {
     FrontendStateProjected,
     TurnFinished,
     TurnLockReleasing,
+    ProviderUsageCaptured,
 }
 
 impl PipelineEventKind {
@@ -171,6 +172,7 @@ impl PipelineEventKind {
             Self::FrontendStateProjected => "frontend_state_projected",
             Self::TurnFinished => "turn_finished",
             Self::TurnLockReleasing => "turn_lock_releasing",
+            Self::ProviderUsageCaptured => "provider_usage_captured",
         }
     }
 }
