@@ -10,6 +10,7 @@ The root `README.md` explains the project at a high level. This file explains ho
 
 ```text
 api/          Axum HTTP API, route handlers, application state, API stores
+cli/          `rp` binary — terminal driver linking the engine directly
 domain/       Canonical scenario, world state, delta, visibility, and validation types
 engine/       Turn pipeline, prompt/context construction, validation, reduction, projection
 persistence/  PostgreSQL repositories, migrations, and database-backed locks
