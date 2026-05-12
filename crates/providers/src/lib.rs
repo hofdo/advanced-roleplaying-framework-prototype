@@ -1,3 +1,4 @@
+pub mod factory;
 pub(crate) mod http;
 pub mod llama_cpp;
 pub mod mock;
@@ -6,6 +7,7 @@ pub mod openrouter;
 pub mod provider;
 pub mod secrets;
 
+pub use factory::build_provider_from_config;
 pub use llama_cpp::*;
 pub use mock::*;
 pub use openai_compatible::*;

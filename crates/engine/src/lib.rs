@@ -6,6 +6,7 @@ pub mod prompt;
 pub mod reducer;
 pub mod safety;
 pub mod scene;
+pub mod streaming;
 pub mod validation;
 
 pub use context::*;
@@ -16,4 +17,5 @@ pub use prompt::*;
 pub use reducer::*;
 pub use safety::*;
 pub use scene::*;
+pub use streaming::*;
 pub use validation::*;

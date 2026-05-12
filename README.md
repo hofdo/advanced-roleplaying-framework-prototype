@@ -77,6 +77,7 @@ For streaming turns, visible narration is streamed first and structured delta ex
 ```text
 crates/
   api/          Axum HTTP API, routes, application state
+  cli/          `rp` CLI for driving the engine end-to-end from the terminal
   domain/       Core domain types and typed delta variants
   engine/       Turn pipeline, prompts, validation, reducers, projection
   persistence/  PostgreSQL repositories and migrations
@@ -102,6 +103,7 @@ The Rust workspace contains:
 
 ```text
 crates/api
+crates/cli
 crates/domain
 crates/engine
 crates/persistence
@@ -258,6 +260,38 @@ Expected shape:
   "database": "postgres:ok"
 }
 ```
+
+## CLI (`rp`)
+
+The `rp` binary drives the engine directly — no HTTP layer involved — so you can play test scenarios from the terminal. Defaults to the in-memory store; pass `--postgres` (or set `ROLEPLAY_CLI_POSTGRES=1`) for the durable backend.
+
+```bash
+# Memory mode quickstart
+cargo run -p cli -- scenario create --sample chosen-beyond-goddess
+cargo run -p cli -- session create --scenario <SCENARIO_ID> --title "Smoke"
+cargo run -p cli -- turn <SESSION_ID> --input "I greet the examiner."
+cargo run -p cli -- turn <SESSION_ID> --input "I draw my sword." --stream
+cargo run -p cli -- world <SESSION_ID>
+cargo run -p cli -- world <SESSION_ID> --admin   # includes GM-only facts
+```
+
+Subcommands:
+
+| Command | Description |
+|---|---|
+| `scenario create [--file PATH \| --sample NAME]` | Create from JSON or a built-in sample |
+| `scenario list / get / delete` | Standard scenario management |
+| `session create --scenario <ID>` | Start a new session |
+| `session list / get` | Enumerate / inspect sessions |
+| `session set-provider <ID> [--provider-id UUID \| --clear]` | Pin a session to a registered provider |
+| `turn <SESSION_ID> --input "..." [--mode action\|dialogue\|direct\|remember] [--stream] [--admin]` | Submit a turn |
+| `world <SESSION_ID> [--admin]` | Show projected (or raw) world state |
+| `provider register --file PATH` | Postgres only: persist a `ProviderConfig` |
+| `provider list / remove / models` | Postgres only: enumerate / clean up registry |
+
+Streaming turns render tokens as they arrive and print a final block with `world_state_version`, `changed_entities`, and (when the provider reports it) usage + cost.
+
+`--admin` on `turn` and `world` swaps in an admin `ViewerContext` so GM-only facts surface — same secrecy semantics as the `/admin/sessions/:id/export/raw` HTTP route.
 
 ## API Surface
 

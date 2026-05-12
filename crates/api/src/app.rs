@@ -11,11 +11,9 @@ use axum::{
 };
 use domain::{Scenario, SessionId, TurnMode, ViewerContext};
 use engine::{
-    BasicFrontendStateProjector, DefaultTurnPipeline, FrontendStateProjector,
-    HiddenReasoningStripper, PromptBuilder, SessionTurnLock, TurnRequestInput,
+    BasicFrontendStateProjector, DefaultTurnPipeline, FrontendStateProjector, TurnRequestInput,
 };
 use futures::StreamExt;
-use providers::ProviderStreamEvent;
 use serde::{Deserialize, Serialize};
 use std::{convert::Infallible, sync::Arc};
 use uuid::Uuid;
@@ -458,222 +456,54 @@ async fn turn_stream(
             return;
         }
 
-        let input = request.input;
-        let mode = request.mode;
-        // Build a pipeline so all component logic (prepare / finalize) lives in
-        // the engine crate rather than being duplicated here.
-        let pipeline = DefaultTurnPipeline::with_lock(
-            Arc::clone(&resolved_provider),
+        let pipeline = Arc::new(DefaultTurnPipeline::with_lock(
+            resolved_provider,
             Arc::clone(&state.store),
             state.turn_lock.clone(),
+        ));
+
+        let stream = engine::stream_turn(
+            pipeline,
+            engine::StreamTurnRequest {
+                session_id,
+                input: request.input,
+                mode: request.mode,
+                viewer: ViewerContext::player(),
+            },
         );
+        futures::pin_mut!(stream);
 
-        if let Err(error) = pipeline.store
-            .persist_pipeline_event(session_id, "turn_started", "turn_started".into())
-            .await
-        {
-            yield Ok(error_event(error.to_string()));
-            return;
-        }
-
-        let _guard = match pipeline.turn_lock.acquire(session_id).await {
-            Ok(guard) => guard,
-            Err(error) => {
-                yield Ok(error_event(error.to_string()));
-                return;
-            }
-        };
-        if let Err(error) = pipeline.store
-            .persist_pipeline_event(session_id, "turn_lock_acquired", "turn_lock_acquired".into())
-            .await
-        {
-            yield Ok(error_event(error.to_string()));
-            return;
-        }
-
-        // --- Preparation (lock, load, classify, context) ---
-        let prepared = match pipeline.prepare_turn_context(session_id, &input, mode).await {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                yield Ok(error_event(error.to_string()));
-                return;
-            }
-        };
-        if let Err(error) = pipeline.store
-            .persist_pipeline_event(session_id, "context_built", "context_built".into())
-            .await
-        {
-            yield Ok(error_event(error.to_string()));
-            return;
-        }
-
-        // --- Streaming (unique to this path) ---
-        if let Err(error) = pipeline.store
-            .persist_pipeline_event(session_id, "provider_called", "provider_called".into())
-            .await
-        {
-            yield Ok(error_event(error.to_string()));
-            return;
-        }
-        let token_stream = match resolved_provider
-            .stream(pipeline.prompt_builder.build_streaming_prompt(&prepared.context, &input))
-            .await
-        {
-            Ok(stream) => {
-                let _ = pipeline.store
-                    .persist_pipeline_event(session_id, "provider_responded", "provider_responded".into())
-                    .await;
-                let _ = pipeline.store
-                    .persist_pipeline_event(session_id, "stream_started", "stream_started".into())
-                    .await;
-                stream
-            }
-            Err(error) => {
-                yield Ok(error_event(error.to_string()));
-                return;
-            }
-        };
-
-        futures::pin_mut!(token_stream);
-        let mut raw_response = String::new();
-        let mut stream_meta = None;
-        while let Some(token) = token_stream.next().await {
-            match token {
-                Ok(ProviderStreamEvent::Token(token)) => {
-                    if token.contains("<think>")
-                        || token.contains("Internal reasoning:")
-                        || token.contains("Chain of thought:")
-                        || token.contains("Hidden reasoning:")
-                        || token.contains("GM reasoning:")
-                    {
-                        continue;
-                    }
-                    raw_response.push_str(&token);
+        let mut stream_usage = None;
+        while let Some(event) = stream.next().await {
+            match event {
+                Ok(engine::StreamTurnEvent::Token(text)) => {
                     yield Ok(Event::default()
                         .event("token")
-                        .json_data(TokenEvent { text: token })
+                        .json_data(TokenEvent { text })
                         .expect("token event serializes"));
                 }
-                Ok(ProviderStreamEvent::Metadata(meta)) => {
-                    stream_meta = Some(meta);
+                Ok(engine::StreamTurnEvent::ProviderMetadata(meta)) => {
+                    stream_usage = meta.usage.clone();
+                }
+                Ok(engine::StreamTurnEvent::Final(final_)) => {
+                    let usage = stream_usage.clone().or(final_.provider_usage);
+                    yield Ok(Event::default()
+                        .event("final")
+                        .json_data(StreamFinalEvent {
+                            message_id: final_.message_id,
+                            delta_applied: true,
+                            world_state_version: final_.world_state_version,
+                            frontend_state_patch: final_.frontend_state_patch,
+                            usage,
+                        })
+                        .expect("final event serializes"));
                 }
                 Err(error) => {
-                    if matches!(error, providers::ProviderError::StreamIdleTimeout) {
-                        let _ = pipeline.store
-                            .persist_pipeline_event(
-                                session_id,
-                                "provider_stream_idle_timeout",
-                                "provider_stream_idle_timeout".into(),
-                            )
-                            .await;
-                    }
                     yield Ok(error_event(error.to_string()));
                     return;
                 }
             }
         }
-
-        let stream_usage = stream_meta.as_ref().and_then(|m| m.usage.clone());
-
-        // Strip hidden reasoning from the accumulated tokens, then call the
-        // provider a second time to extract a typed WorldStateDelta from the
-        // narration (streaming path can't emit JSON inline).
-        let visible_response = pipeline.stripper.strip(&raw_response);
-        let delta_response = match resolved_provider
-            .generate(pipeline.prompt_builder.build_delta_extraction_prompt(
-                &prepared.context,
-                &input,
-                &visible_response,
-            ))
-            .await
-        {
-            Ok(response) => response,
-            Err(error) => {
-                let _ = pipeline.store.persist_error_event(session_id, error.to_string()).await;
-                yield Ok(error_event(error.to_string()));
-                return;
-            }
-        };
-
-        // --- Finalization (validate, reduce, project, build message records) ---
-        let finalized = match pipeline.finalize_turn_delta(
-            session_id,
-            &prepared,
-            &visible_response,
-            &delta_response.text,
-            &input,
-            &ViewerContext::player(),
-        ).await {
-            Ok(finalized) => finalized,
-            Err(error) => {
-                let _ = pipeline.store.persist_error_event(session_id, error.to_string()).await;
-                yield Ok(error_event(error.to_string()));
-                return;
-            }
-        };
-        let mut finalized = finalized;
-        finalized.assistant_message.raw_provider_output = Some(serde_json::json!({
-            "visible_response_text": visible_response,
-            "delta_raw_output": delta_response
-                .raw_json
-                .unwrap_or_else(|| serde_json::Value::String(delta_response.text)),
-            "provider_usage": stream_meta.as_ref().and_then(|m| m.usage.as_ref()),
-            "provider_cost_usd": stream_meta.as_ref().and_then(|m| m.cost_usd),
-            "generation_id": stream_meta.as_ref().and_then(|m| m.generation_id.as_ref()),
-        }));
-        if let Some(ref meta) = stream_meta {
-            let _ = pipeline.store
-                .persist_pipeline_event(
-                    session_id,
-                    "provider_usage_captured",
-                    serde_json::json!({ "usage": meta.usage, "cost_usd": meta.cost_usd }).to_string(),
-                )
-                .await;
-        }
-        let _ = pipeline.store
-            .persist_pipeline_event(session_id, "delta_applied", "delta_applied".into())
-            .await;
-        let _ = pipeline.store
-            .persist_pipeline_event(
-                session_id,
-                "frontend_state_projected",
-                "frontend_state_projected".into(),
-            )
-            .await;
-
-        let message_id = finalized.assistant_message.id;
-        let world_state_version = finalized.world_state_version;
-        let frontend_state_patch = finalized.frontend_state_patch.clone();
-
-        if let Err(error) = pipeline.store
-            .persist_successful_turn(
-                finalized.user_message,
-                finalized.assistant_message,
-                finalized.validated_delta,
-                finalized.updated_world_state,
-            )
-            .await
-        {
-            yield Ok(error_event(error.to_string()));
-            return;
-        }
-        let _ = pipeline.store
-            .persist_pipeline_event(session_id, "turn_finished", "turn_finished".into())
-            .await;
-        let _ = pipeline.store
-            .persist_pipeline_event(session_id, "turn_lock_releasing", "turn_lock_releasing".into())
-            .await;
-
-        yield Ok(Event::default()
-            .event("final")
-            .json_data(StreamFinalEvent {
-                message_id,
-                delta_applied: true,
-                world_state_version,
-                frontend_state_patch,
-                usage: stream_usage,
-            })
-            .expect("final event serializes"));
     };
 
     Sse::new(events)
