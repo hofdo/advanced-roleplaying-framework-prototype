@@ -1,0 +1,24 @@
+[package]
+name = "cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "rp"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+domain.workspace = true
+engine.workspace = true
+futures.workspace = true
+persistence.workspace = true
+providers.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+shared.workspace = true
+tokio.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true

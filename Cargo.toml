@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/api",
+    "crates/cli",
     "crates/domain",
     "crates/engine",
     "crates/persistence",
@@ -19,6 +20,7 @@ anyhow = "1"
 async-stream = "0.3"
 async-trait = "0.1"
 axum = { version = "0.7", features = ["macros"] }
+clap = { version = "4", features = ["derive", "env"] }
 bytes = "1"
 futures = "0.3"
 http = "1"
