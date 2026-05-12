@@ -40,6 +40,8 @@ enum Command {
     /// Manage persisted provider configurations (Postgres only).
     #[command(subcommand)]
     Provider(commands::provider::Cmd),
+    /// Interactive chat REPL — type turns and slash-commands in one session.
+    Chat(commands::chat::Args),
 }
 
 #[tokio::main]
@@ -88,6 +90,10 @@ async fn dispatch(cli: Cli) -> Result<()> {
         Command::Provider(cmd) => {
             let state = build_state(runtime).await?;
             commands::provider::run(state, cmd).await
+        }
+        Command::Chat(args) => {
+            let state = build_state(runtime).await?;
+            commands::chat::run(state, args).await
         }
     }
 }

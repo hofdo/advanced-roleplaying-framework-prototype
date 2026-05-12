@@ -1,13 +1,15 @@
-use std::{io::Write, sync::Arc};
+use std::sync::Arc;
 
 use anyhow::Result;
 use clap::{Args as ClapArgs, ValueEnum};
 use domain::{TurnMode, ViewerContext};
-use engine::{DefaultTurnPipeline, StreamTurnEvent, StreamTurnRequest, TurnRequestInput};
-use futures::StreamExt;
+use engine::{DefaultTurnPipeline, TurnRequestInput};
 use uuid::Uuid;
 
-use crate::{bootstrap::CliState, render::print_json};
+use crate::{
+    bootstrap::CliState,
+    render::{print_json, render_streaming_turn},
+};
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
@@ -63,58 +65,7 @@ pub async fn run(state: CliState, args: Args) -> Result<()> {
     ));
 
     if args.stream {
-        let stream = engine::stream_turn(
-            pipeline,
-            StreamTurnRequest {
-                session_id: args.session_id,
-                input: args.input,
-                mode,
-                viewer,
-            },
-        );
-        futures::pin_mut!(stream);
-
-        let stdout = std::io::stdout();
-        let mut handle = stdout.lock();
-        let mut metadata = None;
-        let mut final_event = None;
-
-        while let Some(event) = stream.next().await {
-            match event? {
-                StreamTurnEvent::Token(token) => {
-                    handle.write_all(token.as_bytes())?;
-                    handle.flush()?;
-                }
-                StreamTurnEvent::ProviderMetadata(meta) => {
-                    metadata = Some(meta);
-                }
-                StreamTurnEvent::Final(final_) => {
-                    final_event = Some(final_);
-                }
-            }
-        }
-        writeln!(handle)?;
-        writeln!(handle, "---")?;
-
-        if let Some(final_) = final_event {
-            writeln!(handle, "world_state_version: {}", final_.world_state_version)?;
-            writeln!(
-                handle,
-                "changed_entities: {}",
-                serde_json::to_string(&final_.changed_entities)?
-            )?;
-            if let Some(usage) = metadata.as_ref().and_then(|m| m.usage.as_ref()) {
-                writeln!(
-                    handle,
-                    "usage: prompt={} completion={} total={}",
-                    usage.prompt_tokens, usage.completion_tokens, usage.total_tokens
-                )?;
-            }
-            if let Some(cost) = metadata.as_ref().and_then(|m| m.cost_usd) {
-                writeln!(handle, "cost_usd: {cost}")?;
-            }
-        }
-        Ok(())
+        render_streaming_turn(pipeline, args.session_id, args.input, mode, viewer).await
     } else {
         let response = pipeline
             .process_turn(TurnRequestInput {
