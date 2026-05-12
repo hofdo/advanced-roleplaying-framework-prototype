@@ -46,9 +46,71 @@ For streaming, the CLI consumes `engine::stream_turn` directly. The same functio
 
 ## Usage
 
-### Quickstart (memory mode)
+### Quickstart — chat mode (recommended)
 
-In memory mode, state lives only for the lifetime of the process. Use it for one-shot smoke tests and prompt iteration. For multi-command sessions, use `--postgres`.
+`rp chat` is the interactive REPL. State lives for the lifetime of the process; multi-turn play works without copying UUIDs:
+
+```bash
+cargo run -p cli -- chat --sample chosen-beyond-goddess
+```
+
+Inside the REPL, plain text becomes a turn. Lines starting with `/` are slash-commands:
+
+```
+loaded sample scenario abc-123 (session def-456)
+type /help for commands, /exit to quit.
+rp> /status
+scenario: abc-123
+session:  def-456
+mode:     auto
+stream:   on
+admin:    off
+rp> The examiner steps forward and asks me to declare my mage rank.
+[tokens stream live ...]
+---
+world_state_version: 1
+changed_entities: [...]
+rp> /mode dialogue
+mode set to dialogue
+rp> /world
+{ ... projected state ... }
+rp> /admin on
+admin on
+rp!> /world
+{ ... raw state including GM-only facts ... }
+rp!> /exit
+goodbye.
+```
+
+The prompt is `rp> ` normally and `rp!> ` while admin is on. `?` instead of `>` means no session is active.
+
+#### Slash commands
+
+| Command | Description |
+|---|---|
+| `/help` | Show in-REPL command reference |
+| `/exit`, `/quit` | Leave the REPL |
+| `/status` | Print active scenario / session / mode / stream / admin |
+| `/scenario create --sample NAME` | Build and persist a built-in sample |
+| `/scenario create --file PATH` | Load a scenario from JSON |
+| `/scenario list` | List scenarios |
+| `/scenario use <UUID>` | Switch active scenario (clears active session) |
+| `/session new [--title TEXT]` | Start a fresh session for the active scenario |
+| `/session list` | List sessions |
+| `/session use <UUID>` | Switch active session |
+| `/session show` | Print the active session record |
+| `/world [--admin]` | Show projected (or raw) world state |
+| `/mode <action\|dialogue\|direct\|remember\|auto>` | Set turn mode for plain-text turns |
+| `/stream <on\|off>` | Toggle live token streaming |
+| `/admin <on\|off>` | Toggle admin viewer for turns and `/world` |
+
+Plain text (any line not starting with `/`) is submitted as a turn against the active session. Streaming is on by default; tokens render live and a `---` separator precedes the `world_state_version` / `changed_entities` / `usage` summary.
+
+Line history is persisted to `~/.config/rp/history`. `Ctrl+C` cancels an in-flight turn (releases the session lock immediately). `Ctrl+D` exits cleanly.
+
+### Quickstart — one-shot commands (memory mode)
+
+In memory mode, state lives only for the lifetime of the process. Use it for one-shot smoke tests and prompt iteration. For multi-command flows without entering chat mode, use `--postgres`.
 
 ```bash
 cargo run -p cli -- scenario create --sample chosen-beyond-goddess
@@ -93,6 +155,7 @@ cargo run -p cli -- turn <SESSION_ID> --input "describe the room" --stream
 
 | Command | Description |
 |---|---|
+| `chat [--session UUID \| --scenario UUID \| --sample NAME] [--mode MODE] [--admin]` | Interactive REPL (see Chat mode section above) |
 | `scenario create [--file PATH \| --sample NAME]` | Create from JSON on disk or a built-in sample (`chosen-beyond-goddess`) |
 | `scenario list / get <ID> / delete <ID>` | Standard scenario management |
 | `session create --scenario <ID> [--title TEXT]` | Start a session for an existing scenario |

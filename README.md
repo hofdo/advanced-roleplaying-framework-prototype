@@ -266,7 +266,12 @@ Expected shape:
 The `rp` binary drives the engine directly — no HTTP layer involved — so you can play test scenarios from the terminal. Defaults to the in-memory store; pass `--postgres` (or set `ROLEPLAY_CLI_POSTGRES=1`) for the durable backend.
 
 ```bash
-# Memory mode quickstart
+# Interactive chat mode — recommended for actual play
+cargo run -p cli -- chat --sample chosen-beyond-goddess
+# Inside the REPL: plain text submits a turn, slash-commands manage state.
+# /help lists everything.
+
+# One-shot commands
 cargo run -p cli -- scenario create --sample chosen-beyond-goddess
 cargo run -p cli -- session create --scenario <SCENARIO_ID> --title "Smoke"
 cargo run -p cli -- turn <SESSION_ID> --input "I greet the examiner."
@@ -279,6 +284,7 @@ Subcommands:
 
 | Command | Description |
 |---|---|
+| `chat [--sample NAME \| --scenario UUID \| --session UUID]` | Interactive REPL: plain text → turn, `/`-prefixed → command |
 | `scenario create [--file PATH \| --sample NAME]` | Create from JSON or a built-in sample |
 | `scenario list / get / delete` | Standard scenario management |
 | `session create --scenario <ID>` | Start a new session |
