@@ -1,0 +1,139 @@
+{
+  "id": "00000000-0000-0000-0000-000000000000",
+  "title": "Glass Senate Crisis",
+  "scenario_type": "adventure",
+  "setting": "A canal city ruled from a transparent senate chamber where votes, bribes, and assassins move in public view.",
+  "tone": "political intrigue, sharp negotiation, unstable alliances",
+  "rules": [
+    "Public statements should shift faction standing more than private threats.",
+    "No faction is purely loyal; each wants leverage before it wants justice."
+  ],
+  "locations": [
+    {
+      "id": "glass-senate",
+      "name": "The Glass Senate",
+      "description": "A vaulted crystal hall where every whisper echoes and every balcony has witnesses.",
+      "visible": true
+    },
+    {
+      "id": "mirror-docks",
+      "name": "Mirror Docks",
+      "description": "Floodlit canals where merchant houses exchange cargo, rumors, and knife work.",
+      "visible": true
+    }
+  ],
+  "factions": [
+    {
+      "id": "reform-bloc",
+      "name": "Reform Bloc",
+      "description": "Young senators trying to break the old families' trade monopolies.",
+      "faction_identity": {
+        "public_goal": "pass the emergency anti-corruption vote",
+        "hidden_goal": "use the crisis to centralize power under their coalition",
+        "values": ["transparency", "momentum", "public legitimacy"],
+        "fears": ["delay", "scandal", "appearing naive"],
+        "methods": ["public hearings", "leaks", "procedural traps"]
+      },
+      "initial_standing": 10
+    },
+    {
+      "id": "old-quays",
+      "name": "Old Quays Compact",
+      "description": "Merchant families whose fleets feed the city and buy half its votes.",
+      "faction_identity": {
+        "public_goal": "prevent panic and keep trade moving",
+        "hidden_goal": "bury proof that their ships armed the failed coup",
+        "values": ["continuity", "profit", "family honor"],
+        "fears": ["asset seizure", "dock riots", "confession under oath"],
+        "methods": ["patronage", "blackmail", "controlled shortages"]
+      },
+      "initial_standing": -10
+    }
+  ],
+  "npcs": [
+    {
+      "id": "senator-ilex",
+      "name": "Senator Ilex Varo",
+      "description": "A reform senator with polished speeches and very little time.",
+      "role_identity": {
+        "core_emotion": "controlled urgency",
+        "motivation": "secure the vote before witnesses disappear",
+        "worldview": "institutions survive only when forced to confess",
+        "fear": "the reform bloc fractures in public",
+        "desire": "make the player a credible neutral envoy",
+        "speech_style": "precise, persuasive, impatient",
+        "boundaries": ["will not authorize open murder"],
+        "values": ["legitimacy", "evidence", "timing"]
+      },
+      "stats": {
+        "tags": ["senator", "reformer", "strategist"]
+      },
+      "initial_status": "active"
+    },
+    {
+      "id": "dockmaster-sable",
+      "name": "Dockmaster Sable",
+      "description": "A smiling broker who knows which boats carried weapons and which witnesses saw them.",
+      "role_identity": {
+        "core_emotion": "amused caution",
+        "motivation": "sell the truth without being the one blamed for it",
+        "worldview": "every principle has a storage fee",
+        "fear": "becoming expendable to both sides",
+        "desire": "extract immunity and favors",
+        "speech_style": "wry, transactional, never direct at first",
+        "boundaries": ["will not name clients without protection"],
+        "values": ["survival", "profit", "useful secrets"]
+      },
+      "stats": null,
+      "initial_status": "active"
+    }
+  ],
+  "quests": [
+    {
+      "id": "secure-vote",
+      "title": "Secure the Emergency Vote",
+      "description": "Gather leverage, protect witnesses, and decide which faction deserves public trust.",
+      "objectives": [
+        {
+          "id": "find-witness",
+          "title": "Find a coup-shipment witness",
+          "completed": false
+        },
+        {
+          "id": "sway-senators",
+          "title": "Sway undecided senators",
+          "completed": false
+        }
+      ],
+      "visible": true
+    }
+  ],
+  "secrets": [
+    {
+      "id": "armed-coup",
+      "text": "Old Quays ships moved weapons for the failed coup under emergency grain manifests.",
+      "reveal_conditions": ["the player obtains dock manifests and a witness statement"]
+    },
+    {
+      "id": "reform-power-grab",
+      "text": "The Reform Bloc's emergency bill contains a clause granting temporary arrest powers without appeal.",
+      "reveal_conditions": ["the player reads the full bill or questions a nervous junior senator"]
+    }
+  ],
+  "clocks": [
+    {
+      "id": "vote-window",
+      "title": "The senate vote is called",
+      "current": 2,
+      "max": 6,
+      "consequence": "The vote proceeds before the player has enough evidence to shape the outcome."
+    },
+    {
+      "id": "witness-silenced",
+      "title": "Key witnesses disappear",
+      "current": 1,
+      "max": 4,
+      "consequence": "The most direct proof of the coup shipment is lost."
+    }
+  ]
+}

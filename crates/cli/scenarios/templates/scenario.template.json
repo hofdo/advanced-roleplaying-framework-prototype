@@ -1,0 +1,85 @@
+{
+  "id": "00000000-0000-0000-0000-000000000000",
+  "title": "Template Scenario",
+  "scenario_type": "adventure",
+  "setting": "Describe the world, genre, and immediate premise.",
+  "tone": "Describe expected play style and emotional texture.",
+  "rules": [
+    "Add scenario-specific guidance for the GM model."
+  ],
+  "locations": [
+    {
+      "id": "starting-location",
+      "name": "Starting Location",
+      "description": "What the player can immediately perceive here.",
+      "visible": true
+    }
+  ],
+  "factions": [
+    {
+      "id": "main-faction",
+      "name": "Main Faction",
+      "description": "What this faction is and how it appears to outsiders.",
+      "faction_identity": {
+        "public_goal": "What the faction says it wants.",
+        "hidden_goal": "What the faction secretly wants, or null if none.",
+        "values": ["value-one"],
+        "fears": ["fear-one"],
+        "methods": ["method-one"]
+      },
+      "initial_standing": 0
+    }
+  ],
+  "npcs": [
+    {
+      "id": "main-npc",
+      "name": "Main NPC",
+      "description": "Observable description and role in the opening scene.",
+      "role_identity": {
+        "core_emotion": "dominant emotional state",
+        "motivation": "what they are trying to accomplish",
+        "worldview": "how they interpret events",
+        "fear": "what they fear, or null if none",
+        "desire": "what they want, or null if none",
+        "speech_style": "how they talk",
+        "boundaries": ["what they will not do"],
+        "values": ["value-one"]
+      },
+      "stats": {
+        "tags": ["optional-tag"]
+      },
+      "initial_status": "active"
+    }
+  ],
+  "quests": [
+    {
+      "id": "opening-quest",
+      "title": "Opening Quest",
+      "description": "What the player is initially trying to resolve.",
+      "objectives": [
+        {
+          "id": "first-objective",
+          "title": "First objective",
+          "completed": false
+        }
+      ],
+      "visible": true
+    }
+  ],
+  "secrets": [
+    {
+      "id": "hidden-truth",
+      "text": "A GM-only fact that must not be revealed until discovered.",
+      "reveal_conditions": ["what must happen before the secret can be revealed"]
+    }
+  ],
+  "clocks": [
+    {
+      "id": "pressure-clock",
+      "title": "A pressure clock advances",
+      "current": 0,
+      "max": 6,
+      "consequence": "What happens if the clock fills."
+    }
+  ]
+}

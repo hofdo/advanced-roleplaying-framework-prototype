@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Subcommand;
 use domain::Scenario;
 use uuid::Uuid;
@@ -7,6 +7,7 @@ use crate::{
     bootstrap::CliState,
     render::print_json,
     samples::{build_sample, sample_names},
+    scenario_io::read_scenario_file,
 };
 
 #[derive(Subcommand, Debug)]
@@ -52,10 +53,7 @@ pub async fn run(state: CliState, cmd: Cmd) -> Result<()> {
 
 async fn create(state: CliState, file: Option<String>, sample: Option<String>) -> Result<()> {
     let scenario: Scenario = match (file, sample) {
-        (Some(path), None) => {
-            let bytes = std::fs::read(&path).with_context(|| format!("reading {path}"))?;
-            serde_json::from_slice(&bytes).with_context(|| format!("parsing scenario {path}"))?
-        }
+        (Some(path), None) => read_scenario_file(&path)?,
         (None, Some(name)) => build_sample(&name)?,
         (None, None) => anyhow::bail!(
             "must provide --file <PATH> or --sample <NAME>; known samples: {}",

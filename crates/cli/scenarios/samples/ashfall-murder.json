@@ -1,0 +1,132 @@
+{
+  "id": "00000000-0000-0000-0000-000000000000",
+  "title": "Ashfall Murder at Blackfen",
+  "scenario_type": "adventure",
+  "setting": "A rain-choked marsh town where volcanic ash falls from a distant, waking caldera.",
+  "tone": "gothic mystery, tense investigation, grounded danger",
+  "rules": [
+    "Clues should create pressure rather than solve the mystery outright.",
+    "Every suspect should have one truthful motive and one misleading secret."
+  ],
+  "locations": [
+    {
+      "id": "blackfen-inn",
+      "name": "Blackfen Inn",
+      "description": "A peat-smoke inn where the victim's sealed room overlooks the flooded causeway.",
+      "visible": true
+    },
+    {
+      "id": "ash-chapel",
+      "name": "Ash Chapel",
+      "description": "A half-buried chapel whose bell rings when no one touches it.",
+      "visible": true
+    }
+  ],
+  "factions": [
+    {
+      "id": "reeve-guard",
+      "name": "Reeve's Guard",
+      "description": "Undermanned local officers trying to keep panic out of the streets.",
+      "faction_identity": {
+        "public_goal": "identify the killer before the next market day",
+        "hidden_goal": "hide evidence that the guard lost the victim's confiscated ledger",
+        "values": ["order", "reputation", "swift closure"],
+        "fears": ["mob justice", "outside magistrates"],
+        "methods": ["witness pressure", "curfews", "evidence control"]
+      },
+      "initial_standing": 0
+    },
+    {
+      "id": "cinder-cult",
+      "name": "Cinder Veil",
+      "description": "A rumor-shrouded sect blamed for every strange ashfall in Blackfen.",
+      "faction_identity": {
+        "public_goal": "deny involvement in the murder",
+        "hidden_goal": "recover a relic hidden inside the victim's ledger",
+        "values": ["omens", "secrecy", "sacrifice"],
+        "fears": ["public exposure", "false prophecy"],
+        "methods": ["coded hymns", "night meetings", "planted symbols"]
+      },
+      "initial_standing": -15
+    }
+  ],
+  "npcs": [
+    {
+      "id": "mara-vale",
+      "name": "Mara Vale",
+      "description": "The innkeeper who found the body and remembers more than she wants to say.",
+      "role_identity": {
+        "core_emotion": "contained fear",
+        "motivation": "protect her family from being blamed",
+        "worldview": "truth is useful only when it survives the powerful",
+        "fear": "the guard will discover her forged alibi",
+        "desire": "get the investigation away from the inn",
+        "speech_style": "plainspoken, evasive when pressed",
+        "boundaries": ["will not endanger her daughter"],
+        "values": ["family", "practical truth"]
+      },
+      "stats": {
+        "tags": ["observant", "local", "nervous"]
+      },
+      "initial_status": "active"
+    },
+    {
+      "id": "sergeant-orrin",
+      "name": "Sergeant Orrin Pike",
+      "description": "A guard sergeant who wants the case closed before outsiders arrive.",
+      "role_identity": {
+        "core_emotion": "strained authority",
+        "motivation": "preserve civic order and his own career",
+        "worldview": "a messy truth can be worse than a clean lie",
+        "fear": "the missing ledger exposes his negligence",
+        "desire": "pin the murder on a believable suspect",
+        "speech_style": "formal, clipped, increasingly defensive",
+        "boundaries": ["will not confess unless cornered by evidence"],
+        "values": ["order", "rank", "control"]
+      },
+      "stats": null,
+      "initial_status": "active"
+    }
+  ],
+  "quests": [
+    {
+      "id": "solve-murder",
+      "title": "Find the Killer",
+      "description": "Investigate the sealed-room murder before Blackfen chooses its own culprit.",
+      "objectives": [
+        {
+          "id": "inspect-room",
+          "title": "Inspect the victim's room",
+          "completed": false
+        },
+        {
+          "id": "question-witnesses",
+          "title": "Question the inn's witnesses",
+          "completed": false
+        }
+      ],
+      "visible": true
+    }
+  ],
+  "secrets": [
+    {
+      "id": "ledger-relic",
+      "text": "The victim's ledger contained a pressed black-glass relic wanted by the Cinder Veil.",
+      "reveal_conditions": ["the player finds ash sealed between the ledger pages"]
+    },
+    {
+      "id": "guard-lost-ledger",
+      "text": "Sergeant Orrin lost the confiscated ledger before the murder was discovered.",
+      "reveal_conditions": ["the player compares guard evidence logs with inn witness timing"]
+    }
+  ],
+  "clocks": [
+    {
+      "id": "mob-panic",
+      "title": "Blackfen turns on a suspect",
+      "current": 1,
+      "max": 6,
+      "consequence": "A public accusation triggers violence before the mystery is solved."
+    }
+  ]
+}

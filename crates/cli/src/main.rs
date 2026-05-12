@@ -7,11 +7,16 @@ mod bootstrap;
 mod commands;
 mod render;
 mod samples;
+mod scenario_io;
 
 use bootstrap::{CliRuntimeOptions, build_state};
 
 #[derive(Parser, Debug)]
-#[command(name = "rp", version, about = "Roleplay engine CLI — dogfood the engine from the terminal")]
+#[command(
+    name = "rp",
+    version,
+    about = "Roleplay engine CLI — dogfood the engine from the terminal"
+)]
 struct Cli {
     /// Use Postgres storage instead of the in-memory store.
     #[arg(long, global = true, env = "ROLEPLAY_CLI_POSTGRES")]

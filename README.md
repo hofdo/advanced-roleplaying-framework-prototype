@@ -280,6 +280,8 @@ cargo run -p cli -- world <SESSION_ID>
 cargo run -p cli -- world <SESSION_ID> --admin   # includes GM-only facts
 ```
 
+Built-in sample scenarios are `ashfall-murder`, `chosen-beyond-goddess`, and `glass-senate-crisis`. Custom scenarios can be copied from `crates/cli/scenarios/templates/scenario.template.json` and loaded with `scenario create --file PATH`; imports are validated before storage.
+
 Subcommands:
 
 | Command | Description |

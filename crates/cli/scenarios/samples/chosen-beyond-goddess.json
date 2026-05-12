@@ -1,0 +1,75 @@
+{
+  "id": "00000000-0000-0000-0000-000000000000",
+  "title": "Chosen Beyond the Goddess",
+  "scenario_type": "adventure",
+  "setting": "A high fantasy isekai world of sword and magic.",
+  "tone": "heroic, consequence-driven, high fantasy",
+  "rules": [],
+  "locations": [
+    {
+      "id": "guildhall",
+      "name": "Guildhall",
+      "description": "A busy hall filled with examiners and witnesses.",
+      "visible": true
+    }
+  ],
+  "factions": [
+    {
+      "id": "guild",
+      "name": "Continental Adventurer Guild",
+      "description": "Ranks adventurers and monitors dangerous anomalies.",
+      "faction_identity": {
+        "public_goal": "assign quests and protect settlements",
+        "hidden_goal": "monitor calamity-level individuals",
+        "values": ["competence", "contracts"],
+        "fears": ["public panic"],
+        "methods": ["ranking exams"]
+      },
+      "initial_standing": 0
+    }
+  ],
+  "npcs": [
+    {
+      "id": "examiner",
+      "name": "Guild Examiner",
+      "description": "A veteran examiner with a careful eye.",
+      "role_identity": {
+        "core_emotion": "alert",
+        "motivation": "protect civilians while evaluating the player",
+        "worldview": "power demands accountability",
+        "fear": "uncontrolled magical catastrophe",
+        "desire": null,
+        "speech_style": "measured and formal",
+        "boundaries": ["will not ignore public danger"],
+        "values": ["order"]
+      },
+      "stats": null,
+      "initial_status": "active"
+    }
+  ],
+  "quests": [
+    {
+      "id": "register",
+      "title": "Register at the Guild",
+      "description": "Complete the registration process.",
+      "objectives": [],
+      "visible": true
+    }
+  ],
+  "secrets": [
+    {
+      "id": "void-mark",
+      "text": "The player's soul-mark was not created by the goddess.",
+      "reveal_conditions": ["a divine relic reacts to the mark"]
+    }
+  ],
+  "clocks": [
+    {
+      "id": "fame",
+      "title": "The player's fame spreads",
+      "current": 1,
+      "max": 6,
+      "consequence": "Major factions start treating the player as a strategic threat."
+    }
+  ]
+}

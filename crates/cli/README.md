@@ -15,7 +15,10 @@ It should stay thin. It should not host its own engine logic, not own its own pr
 - `src/commands/turn.rs` — submit a blocking turn or stream narration tokens live.
 - `src/commands/world.rs` — show player-projected state or, with `--admin`, the raw `WorldState`.
 - `src/commands/provider.rs` — Postgres-only: register, list, remove, and probe registered LLM providers.
-- `src/samples.rs` — built-in sample scenarios for fast onboarding without writing JSON.
+- `src/samples.rs` — embedded JSON sample catalog for fast onboarding without writing JSON.
+- `src/scenario_io.rs` — scenario JSON parsing and domain validation for file imports.
+- `scenarios/samples/*.json` — built-in scenario definitions. Add a file here to add a built-in sample.
+- `scenarios/templates/scenario.template.json` — copyable authoring skeleton for new scenarios.
 - `src/render.rs` — small JSON pretty-printer used by the subcommand handlers.
 - `tests/cli_smoke.rs` — in-process integration test driving the full scenario → session → turn → world cycle.
 
@@ -117,6 +120,14 @@ cargo run -p cli -- scenario create --sample chosen-beyond-goddess
 cargo run -p cli -- scenario list
 ```
 
+Built-in sample names are generated from `crates/cli/scenarios/samples/*.json`:
+
+- `ashfall-murder`
+- `chosen-beyond-goddess`
+- `glass-senate-crisis`
+
+Use `crates/cli/scenarios/templates/scenario.template.json` as a starting point for custom `--file` imports. Both built-in samples and imported files are deserialized as `domain::Scenario` and validated before storage.
+
 ### Multi-command flows (Postgres)
 
 ```bash
@@ -156,7 +167,7 @@ cargo run -p cli -- turn <SESSION_ID> --input "describe the room" --stream
 | Command | Description |
 |---|---|
 | `chat [--session UUID \| --scenario UUID \| --sample NAME] [--mode MODE] [--admin]` | Interactive REPL (see Chat mode section above) |
-| `scenario create [--file PATH \| --sample NAME]` | Create from JSON on disk or a built-in sample (`chosen-beyond-goddess`) |
+| `scenario create [--file PATH \| --sample NAME]` | Create from validated JSON on disk or a built-in sample |
 | `scenario list / get <ID> / delete <ID>` | Standard scenario management |
 | `session create --scenario <ID> [--title TEXT]` | Start a session for an existing scenario |
 | `session list / get <ID>` | Enumerate / inspect sessions |

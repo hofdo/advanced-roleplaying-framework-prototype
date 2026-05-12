@@ -11,15 +11,14 @@ use anyhow::{Context, Result};
 use clap::Args as ClapArgs;
 use domain::{ScenarioId, SessionId, TurnMode, ViewerContext};
 use engine::{DefaultTurnPipeline, FrontendStateProjector, TurnRequestInput};
-use rustyline::{
-    Editor, error::ReadlineError, history::FileHistory,
-};
+use rustyline::{Editor, error::ReadlineError, history::FileHistory};
 use uuid::Uuid;
 
 use crate::{
     bootstrap::CliState,
     render::{print_json, render_streaming_turn},
     samples::{build_sample, sample_names},
+    scenario_io::read_scenario_file,
 };
 
 #[derive(ClapArgs, Debug)]
@@ -327,7 +326,10 @@ pub(crate) async fn run_with_source<L: LineSource>(
             .await?
             .ok_or_else(|| anyhow::anyhow!("could not create session for sample scenario"))?;
         chat.active_session = Some(session.id);
-        println!("loaded sample scenario {} (session {})", scenario.id, session.id);
+        println!(
+            "loaded sample scenario {} (session {})",
+            scenario.id, session.id
+        );
     } else if let Some(scenario_id) = args.scenario {
         let scenario = chat
             .cli
@@ -341,7 +343,9 @@ pub(crate) async fn run_with_source<L: LineSource>(
             .store
             .create_session(scenario.id, "CLI Chat".into())
             .await?
-            .ok_or_else(|| anyhow::anyhow!("could not create session for scenario {scenario_id}"))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!("could not create session for scenario {scenario_id}")
+            })?;
         chat.active_session = Some(session.id);
         println!("active scenario {} (session {})", scenario.id, session.id);
     } else if let Some(session_id) = args.session {
@@ -353,7 +357,10 @@ pub(crate) async fn run_with_source<L: LineSource>(
             .ok_or_else(|| anyhow::anyhow!("session {session_id} not found"))?;
         chat.active_scenario = Some(session.scenario_id);
         chat.active_session = Some(session.id);
-        println!("resumed session {} (scenario {})", session.id, session.scenario_id);
+        println!(
+            "resumed session {} (scenario {})",
+            session.id, session.scenario_id
+        );
     } else {
         println!(
             "no session selected. Use /scenario create --sample <{}>, or start with --session/--scenario/--sample.",
@@ -475,7 +482,10 @@ async fn handle_slash(chat: &mut ChatState, cmd: SlashCmd) -> ControlFlow {
             Ok(Some(session)) => {
                 chat.active_session = Some(session.id);
                 chat.active_scenario = Some(session.scenario_id);
-                println!("active session {} (scenario {})", session.id, session.scenario_id);
+                println!(
+                    "active session {} (scenario {})",
+                    session.id, session.scenario_id
+                );
             }
             Ok(None) => println!("session {id} not found."),
             Err(e) => return ControlFlow::Error(e.into()),
@@ -533,10 +543,7 @@ async fn cmd_scenario_create(
 ) -> Result<()> {
     let scenario = match (sample, file) {
         (Some(name), None) => build_sample(&name)?,
-        (None, Some(path)) => {
-            let bytes = std::fs::read(&path).with_context(|| format!("reading {path}"))?;
-            serde_json::from_slice(&bytes).with_context(|| format!("parsing scenario {path}"))?
-        }
+        (None, Some(path)) => read_scenario_file(&path)?,
         (None, None) => {
             println!(
                 "usage: /scenario create --sample <{}>",
@@ -730,7 +737,10 @@ mod tests {
 
     #[test]
     fn parses_world_admin_flag() {
-        assert_eq!(parse_slash("/world"), Some(SlashCmd::World { admin: false }));
+        assert_eq!(
+            parse_slash("/world"),
+            Some(SlashCmd::World { admin: false })
+        );
         assert_eq!(
             parse_slash("/world --admin"),
             Some(SlashCmd::World { admin: true })
@@ -800,8 +810,7 @@ mod tests {
     }"#;
 
     fn build_test_state(provider: Arc<MockProvider>) -> CliState {
-        let store: Arc<dyn ApplicationStore> =
-            Arc::new(InMemoryApplicationStore::new(false));
+        let store: Arc<dyn ApplicationStore> = Arc::new(InMemoryApplicationStore::new(false));
         let turn_lock: Arc<dyn SessionTurnLock> = Arc::new(InMemorySessionTurnLock::default());
         let provider_arc: Arc<dyn LlmProvider> = provider;
         CliState {
@@ -861,10 +870,7 @@ mod tests {
     async fn scripted_repl_starts_with_sample_flag() {
         let provider = Arc::new(MockProvider::new(
             "mock",
-            [
-                "Tokens here".into(),
-                DELTA_JSON.into(),
-            ],
+            ["Tokens here".into(), DELTA_JSON.into()],
         ));
         let state = build_test_state(Arc::clone(&provider));
 
