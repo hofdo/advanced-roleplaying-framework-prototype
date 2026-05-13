@@ -723,11 +723,13 @@ pub fn initial_world_state(session_id: SessionId, scenario: &Scenario) -> WorldS
             .map(|npc| NpcState {
                 npc_id: npc.id.clone(),
                 status: npc.initial_status,
-                visible_to_player: true,
-                location_id: scenario
-                    .locations
-                    .first()
-                    .map(|location| location.id.clone()),
+                visible_to_player: npc.initial_visible_to_player,
+                location_id: npc.initial_location_id.clone().or_else(|| {
+                    scenario
+                        .locations
+                        .first()
+                        .map(|location| location.id.clone())
+                }),
                 attitude_to_player: None,
                 known_facts: vec![],
                 notes: vec![],
@@ -779,3 +781,131 @@ pub fn initial_world_state(session_id: SessionId, scenario: &Scenario) -> WorldS
 
 /// Backward-compatibility alias. New code should use [`InMemoryApplicationStore`].
 pub type ApiStore = InMemoryApplicationStore;
+
+#[cfg(test)]
+mod tests {
+    use super::initial_world_state;
+    use domain::{
+        ClockTemplate, Faction, FactionIdentity, Location, Npc, NpcStatus, Quest, RoleIdentity,
+        Scenario, ScenarioType,
+    };
+    use uuid::Uuid;
+
+    fn scenario() -> Scenario {
+        Scenario {
+            id: Uuid::new_v4(),
+            title: "The Bride of the Iron Archduke".into(),
+            scenario_type: ScenarioType::Adventure,
+            setting: "court intrigue".into(),
+            tone: "gothic".into(),
+            rules: vec![],
+            locations: vec![
+                Location {
+                    id: "frostmere-citadel".into(),
+                    name: "Frostmere Citadel".into(),
+                    description: "The opening location.".into(),
+                    visible: true,
+                },
+                Location {
+                    id: "winter-orphan-house".into(),
+                    name: "Winter Orphan House".into(),
+                    description: "A remote refuge.".into(),
+                    visible: true,
+                },
+            ],
+            factions: vec![Faction {
+                id: "house-falkenrath".into(),
+                name: "House Falkenrath".into(),
+                description: "Northern rulers.".into(),
+                faction_identity: FactionIdentity {
+                    public_goal: "protect the north".into(),
+                    hidden_goal: None,
+                    values: vec!["duty".into()],
+                    fears: vec!["betrayal".into()],
+                    methods: vec!["discipline".into()],
+                },
+                initial_standing: 0,
+            }],
+            npcs: vec![
+                Npc {
+                    id: "steward-marta".into(),
+                    name: "Steward Marta Venn".into(),
+                    description: "The opening speaker.".into(),
+                    role_identity: RoleIdentity {
+                        core_emotion: "guarded courtesy".into(),
+                        motivation: "receive the princess correctly".into(),
+                        worldview: "service reveals character".into(),
+                        fear: None,
+                        desire: None,
+                        speech_style: "plain".into(),
+                        boundaries: vec![],
+                        values: vec!["stability".into()],
+                    },
+                    stats: None,
+                    initial_status: NpcStatus::Active,
+                    initial_location_id: Some("frostmere-citadel".into()),
+                    initial_visible_to_player: true,
+                },
+                Npc {
+                    id: "sister-adela".into(),
+                    name: "Sister Adela Thorn".into(),
+                    description: "Offstage at the orphan house.".into(),
+                    role_identity: RoleIdentity {
+                        core_emotion: "steady".into(),
+                        motivation: "protect the children".into(),
+                        worldview: "mercy matters".into(),
+                        fear: None,
+                        desire: None,
+                        speech_style: "gentle".into(),
+                        boundaries: vec![],
+                        values: vec!["truth".into()],
+                    },
+                    stats: None,
+                    initial_status: NpcStatus::Active,
+                    initial_location_id: Some("winter-orphan-house".into()),
+                    initial_visible_to_player: false,
+                },
+            ],
+            quests: vec![Quest {
+                id: "arrive".into(),
+                title: "Arrive at Frostmere".into(),
+                description: "Enter the citadel.".into(),
+                objectives: vec![],
+                visible: true,
+            }],
+            secrets: vec![],
+            clocks: vec![ClockTemplate {
+                id: "wedding".into(),
+                title: "The wedding approaches".into(),
+                current: 1,
+                max: 6,
+                consequence: "The date arrives.".into(),
+            }],
+        }
+    }
+
+    #[test]
+    fn initial_world_state_respects_npc_authoring_fields() {
+        let scenario = scenario();
+        let world = initial_world_state(Uuid::new_v4(), &scenario);
+
+        assert_eq!(world.current_location_id.as_deref(), Some("frostmere-citadel"));
+        assert_eq!(world.active_speaker_id.as_deref(), Some("steward-marta"));
+
+        let marta = world
+            .npcs
+            .iter()
+            .find(|npc| npc.npc_id == "steward-marta")
+            .expect("marta state");
+        assert_eq!(marta.location_id.as_deref(), Some("frostmere-citadel"));
+        assert!(marta.visible_to_player);
+
+        let adela = world
+            .npcs
+            .iter()
+            .find(|npc| npc.npc_id == "sister-adela")
+            .expect("adela state");
+        assert_eq!(adela.location_id.as_deref(), Some("winter-orphan-house"));
+        assert!(!adela.visible_to_player);
+    }
+}

@@ -128,6 +128,8 @@ pub fn sample_scenario() -> Scenario {
             },
             stats: None,
             initial_status: NpcStatus::Active,
+            initial_location_id: None,
+            initial_visible_to_player: true,
         }],
         quests: vec![Quest {
             id: "register".into(),

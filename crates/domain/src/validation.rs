@@ -6,6 +6,11 @@ use thiserror::Error;
 pub enum DomainValidationError {
     #[error("duplicate {entity} id: {id}")]
     DuplicateId { entity: &'static str, id: String },
+    #[error("unknown location id {location_id} for npc {npc_id}")]
+    UnknownNpcInitialLocation {
+        npc_id: String,
+        location_id: String,
+    },
     #[error("clock {id} current exceeds max")]
     ClockCurrentExceedsMax { id: String },
     #[error("faction {id} standing must be between -100 and 100")]
@@ -54,6 +59,23 @@ pub fn validate_scenario(scenario: &Scenario) -> DomainValidationResult<()> {
         if !(-100..=100).contains(&faction.initial_standing) {
             return Err(DomainValidationError::FactionStandingOutOfRange {
                 id: faction.id.clone(),
+            });
+        }
+    }
+
+    let location_ids = scenario
+        .locations
+        .iter()
+        .map(|location| location.id.as_str())
+        .collect::<HashSet<_>>();
+
+    for npc in &scenario.npcs {
+        if let Some(location_id) = &npc.initial_location_id
+            && !location_ids.contains(location_id.as_str())
+        {
+            return Err(DomainValidationError::UnknownNpcInitialLocation {
+                npc_id: npc.id.clone(),
+                location_id: location_id.clone(),
             });
         }
     }

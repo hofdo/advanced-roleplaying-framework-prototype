@@ -48,7 +48,9 @@
       "stats": {
         "tags": ["optional-tag"]
       },
-      "initial_status": "active"
+      "initial_status": "active",
+      "initial_location_id": "starting-location",
+      "initial_visible_to_player": true
     }
   ],
   "quests": [

@@ -1,0 +1,577 @@
+{
+  "id": "00000000-0000-0000-0000-000000000000",
+  "title": "The Bride of the Iron Archduke",
+  "scenario_type": "adventure",
+  "setting": "The Valedorn Empire is weakening. Its treasury is strained, its provinces increasingly defiant, and rival courts circle the throne like vultures. The player is Princess Elowen Arclaine, daughter of Emperor Hadrian IV, sent north to fulfill an arranged marriage with Archduke Severin Falkenrath, ruler of the militarily vital northern archduchy of Falkenmark. Severin is feared across the empire as the Blood Archduke: a supposedly monstrous tyrant who eats children, decorates his halls with severed heads, and kills anyone who disagrees with him. He is also known as the most powerful mage and warrior in the region. The emperor hopes the marriage will bind Severin's strength to the throne. The princess arrives at Frostmere Citadel carrying years of fear, court gossip, and political pressure into a household that may not be what she expects.",
+  "tone": "gothic court romance, political intrigue, slow-burn trust, reputation versus truth, emotionally restrained but high-stakes",
+  "rules": [
+    "Do not confirm the truth about Archduke Severin's reputation immediately. Let the player discover contradictions through interaction, observation, and investigation.",
+    "The Archduke should be intimidating in presence but controlled, rational, and never cartoonishly cruel.",
+    "The princess's emotional arc must not be railroaded. Love, distrust, political alliance, resentment, and rejection must all remain possible outcomes.",
+    "The marriage is politically significant. Major player choices should affect imperial standing, Falkenmark's trust, and court sabotage.",
+    "Rumors about Severin should appear frequently in early scenes, but the lived reality of his lands should complicate them.",
+    "No GM-only secret may be directly revealed unless its listed reveal condition has been credibly met in play.",
+    "Romance should emerge through respect, vulnerability, shared decisions, and earned trust rather than immediate attraction.",
+    "Severin's strength must feel real. He is an exceptional mage and warrior, but his power should create political consequences rather than solve every problem automatically.",
+    "Imperial courtiers and rival nobles should weaponize ambiguity. Lies are often mixed with partial truths.",
+    "The player's status as a princess matters: words spoken publicly, displays of fear or defiance, and treatment of servants all shape how others perceive her."
+  ],
+  "locations": [
+    {
+      "id": "frostmere-citadel",
+      "name": "Frostmere Citadel",
+      "description": "The black-stone seat of House Falkenrath rises above a snow-fed river. Its towers are severe rather than ornate, its halls guarded by disciplined soldiers rather than preening courtiers. This is where the princess first arrives to meet the man she has been taught to fear.",
+      "visible": true
+    },
+    {
+      "id": "great-hall-of-wolves",
+      "name": "Great Hall of Wolves",
+      "description": "A vast ceremonial chamber hung with war banners, ancestral swords, and carved wooden wolves. Imperial rumor insists the hall once displayed the heads of traitors. In truth, the empty iron hooks along one wall may have a different history.",
+      "visible": true
+    },
+    {
+      "id": "princess-guest-wing",
+      "name": "Princess's Guest Wing",
+      "description": "A private suite prepared for Elowen with careful attention to imperial customs. The room is comfortable but unfamiliar, filled with gestures of courtesy that could be kindness, protocol, or strategic calculation.",
+      "visible": true
+    },
+    {
+      "id": "greycrown-market",
+      "name": "Greycrown Market",
+      "description": "The busy market town below the citadel. Merchants, veterans, farmers, and children move freely under Falkenrath banners. The way common folk speak of their Archduke sharply conflicts with imperial gossip.",
+      "visible": true
+    },
+    {
+      "id": "winter-orphan-house",
+      "name": "Winter Orphan House",
+      "description": "A well-funded refuge for children displaced by border wars. It is supported by the Archduke's treasury and personally inspected by his officials. Certain rumors about Severin sound particularly absurd here.",
+      "visible": true
+    },
+    {
+      "id": "chapel-of-oaths",
+      "name": "Chapel of Oaths",
+      "description": "A solemn stone chapel where noble marriages in Falkenmark are sworn before ancestral witnesses, not merely priests. The arranged marriage will eventually be formalized here unless disrupted.",
+      "visible": true
+    },
+    {
+      "id": "war-room-of-frostmere",
+      "name": "War Room of Frostmere",
+      "description": "A map chamber lit by blue magefire, showing border fortresses, trade roads, imperial troop gaps, and reports of unrest. This is where the princess may glimpse the real burden of Severin's rule.",
+      "visible": true
+    },
+    {
+      "id": "rose-gallery",
+      "name": "Rose Gallery",
+      "description": "A glass-covered corridor maintained in imperial style for visiting nobility. It is beautiful, warm, and discreet enough for conspiratorial conversations among courtiers.",
+      "visible": true
+    }
+  ],
+  "factions": [
+    {
+      "id": "imperial-throne",
+      "name": "The Imperial Throne of Valedorn",
+      "description": "The emperor's court, politically strained and increasingly dependent on powerful regional rulers.",
+      "faction_identity": {
+        "public_goal": "strengthen the empire through a loyal alliance between the crown and Falkenmark",
+        "hidden_goal": "bind Archduke Severin to the imperial line and prevent him from becoming an independent kingmaker",
+        "values": [
+          "dynastic stability",
+          "imperial continuity",
+          "political obedience"
+        ],
+        "fears": [
+          "provincial fragmentation",
+          "Severin acting independently",
+          "the princess rejecting her duty publicly"
+        ],
+        "methods": [
+          "arranged marriage",
+          "court pressure",
+          "selective information",
+          "soft coercion"
+        ]
+      },
+      "initial_standing": 5
+    },
+    {
+      "id": "house-falkenrath",
+      "name": "House Falkenrath",
+      "description": "The ruling house of Falkenmark, feared abroad and respected at home. Its military, mages, and disciplined administration make it the strongest regional power in the northern empire.",
+      "faction_identity": {
+        "public_goal": "honor the alliance, protect Falkenmark, and receive the princess with dignity",
+        "hidden_goal": "determine whether Elowen is a sincere future partner or merely a tool sent to control Severin",
+        "values": [
+          "duty",
+          "competence",
+          "protection of subjects",
+          "earned trust"
+        ],
+        "fears": [
+          "imperial manipulation",
+          "a political spouse used as a spy",
+          "Falkenmark being bled dry for a failing empire"
+        ],
+        "methods": [
+          "formal hospitality",
+          "careful observation",
+          "direct tests of character",
+          "controlled disclosure"
+        ]
+      },
+      "initial_standing": 0
+    },
+    {
+      "id": "ashen-court",
+      "name": "The Ashen Court",
+      "description": "A network of southern nobles, courtiers, and influence brokers who profit from imperial weakness and fear a stable crown-Falkenmark alliance.",
+      "faction_identity": {
+        "public_goal": "protect the traditions of noble balance and prevent one archduke from dominating the empire",
+        "hidden_goal": "sabotage the marriage, preserve the emperor's dependency on court factions, and frame Severin as unfit for imperial kinship",
+        "values": [
+          "old privilege",
+          "leverage",
+          "controlled instability"
+        ],
+        "fears": [
+          "a strong crown backed by Severin",
+          "the princess forming genuine loyalty to Falkenmark",
+          "their fabricated rumors being exposed"
+        ],
+        "methods": [
+          "gossip campaigns",
+          "planted witnesses",
+          "forged correspondence",
+          "assassination by proxy"
+        ]
+      },
+      "initial_standing": -10
+    },
+    {
+      "id": "falkenmark-commonfolk",
+      "name": "The People of Falkenmark",
+      "description": "Townsfolk, veterans, farmers, servants, and refugees living under Severin's rule. They are not naive, but many regard him as stern, just, and dependable.",
+      "faction_identity": {
+        "public_goal": "survive winter, remain protected from raids, and judge whether the imperial princess respects their land",
+        "hidden_goal": null,
+        "values": [
+          "security",
+          "fairness",
+          "plain speech",
+          "remembered deeds over court rumors"
+        ],
+        "fears": [
+          "imperial taxes",
+          "southern nobles dismissing northern suffering",
+          "the Archduke being betrayed through the marriage"
+        ],
+        "methods": [
+          "public warmth or coldness",
+          "rumor correction",
+          "practical loyalty",
+          "communal memory"
+        ]
+      },
+      "initial_standing": 0
+    }
+  ],
+  "npcs": [
+    {
+      "id": "steward-marta",
+      "name": "Steward Marta Venn",
+      "description": "The senior household steward of Frostmere Citadel. Marta is practical, unsentimental, and plainly loyal to Severin because she has watched him govern for years.",
+      "role_identity": {
+        "core_emotion": "guarded courtesy",
+        "motivation": "ensure the princess is treated correctly while quietly assessing whether she will respect the household",
+        "worldview": "fine words matter less than how nobles behave when servants are beneath notice",
+        "fear": "that the princess will treat Falkenmark as a barbaric exile",
+        "desire": "to see the citadel remain stable during the marriage transition",
+        "speech_style": "plain, respectful, measured, mildly blunt when necessary",
+        "boundaries": [
+          "will not gossip freely about her lord",
+          "will not conceal mistreatment of household staff"
+        ],
+        "values": [
+          "competence",
+          "dignity",
+          "household stability"
+        ]
+      },
+      "stats": {
+        "tags": [
+          "steward",
+          "household-authority",
+          "truthful-witness"
+        ]
+      },
+      "initial_status": "active",
+      "initial_location_id": "frostmere-citadel",
+      "initial_visible_to_player": true
+    },
+    {
+      "id": "archduke-severin",
+      "name": "Archduke Severin Falkenrath",
+      "description": "The ruler of Falkenmark. Tall, austere, and composed, Severin carries the pressure of command naturally. His presence is severe enough to validate every frightening story at first glance. Yet his actual behavior is restrained, attentive, and exactingly fair. He is widely considered the most dangerous mage and warrior in the northern empire.",
+      "role_identity": {
+        "core_emotion": "controlled vigilance",
+        "motivation": "protect Falkenmark, assess the princess honestly, and prevent the marriage from becoming an imperial leash",
+        "worldview": "power without discipline becomes tyranny; duty without truth becomes servitude",
+        "fear": "that Elowen has been sent to charm, monitor, or soften him for imperial use",
+        "desire": "a partner who sees him clearly rather than fearing a legend or worshipping power",
+        "speech_style": "precise, restrained, formal in public, unexpectedly direct in private",
+        "boundaries": [
+          "will not beg to be believed",
+          "will not humiliate the princess publicly",
+          "will not tolerate cruelty toward servants, children, or the weak",
+          "will not casually reveal military vulnerabilities"
+        ],
+        "values": [
+          "justice",
+          "self-command",
+          "protection",
+          "truth earned through conduct"
+        ]
+      },
+      "stats": {
+        "tags": [
+          "archduke",
+          "master-warrior",
+          "archmage",
+          "political-power",
+          "potential-romance"
+        ]
+      },
+      "initial_status": "active",
+      "initial_location_id": "frostmere-citadel",
+      "initial_visible_to_player": true
+    },
+    {
+      "id": "captain-roderic",
+      "name": "Captain Roderic Hale",
+      "description": "Commander of the citadel guard, a scarred veteran who has served Severin in war and peace. He knows which battlefield stories are true, which are exaggerated, and which are complete fabrications.",
+      "role_identity": {
+        "core_emotion": "disciplined suspicion",
+        "motivation": "protect the Archduke and detect threats hidden within the imperial entourage",
+        "worldview": "politeness is often just armor worn by assassins",
+        "fear": "an attack during the betrothal festivities",
+        "desire": "to determine whether the princess is a danger or a stabilizing presence",
+        "speech_style": "brief, martial, deferential to rank but not submissive",
+        "boundaries": [
+          "will not discuss classified security matters casually",
+          "will not threaten the princess without cause"
+        ],
+        "values": [
+          "discipline",
+          "loyalty",
+          "evidence"
+        ]
+      },
+      "stats": {
+        "tags": [
+          "guard-captain",
+          "veteran",
+          "security-investigator"
+        ]
+      },
+      "initial_status": "active",
+      "initial_location_id": "frostmere-citadel",
+      "initial_visible_to_player": true
+    },
+    {
+      "id": "lady-ysabet",
+      "name": "Lady Ysabet Vale",
+      "description": "The princess's longtime court companion, sent north as part of her household. Ysabet appears protective and sympathetic, constantly warning Elowen not to trust the Archduke too easily.",
+      "role_identity": {
+        "core_emotion": "anxious calculation",
+        "motivation": "maintain Elowen's dependence on imperial advice while quietly reporting developments back south",
+        "worldview": "survival at court belongs to those who understand which truths may safely be spoken",
+        "fear": "losing imperial favor or being exposed as an informant",
+        "desire": "to remain indispensable to the princess",
+        "speech_style": "soft, intimate, worried, subtly leading",
+        "boundaries": [
+          "will not openly insult the Archduke in front of his household",
+          "will deny acting as an imperial informant unless confronted with proof"
+        ],
+        "values": [
+          "loyalty as she defines it",
+          "influence",
+          "courtly caution"
+        ]
+      },
+      "stats": {
+        "tags": [
+          "lady-in-waiting",
+          "imperial-informant",
+          "emotional-confidante"
+        ]
+      },
+      "initial_status": "active",
+      "initial_location_id": "frostmere-citadel",
+      "initial_visible_to_player": true
+    },
+    {
+      "id": "lord-cassian",
+      "name": "Lord Cassian Valehart",
+      "description": "A polished southern noble attached to the imperial delegation. Charming, reassuring, and outwardly devoted to Elowen's safety, Cassian is one of the main agents of the Ashen Court.",
+      "role_identity": {
+        "core_emotion": "confident opportunism",
+        "motivation": "undermine the marriage without appearing to do so",
+        "worldview": "truth matters only after perception has already won",
+        "fear": "being cut off from court influence if the alliance succeeds",
+        "desire": "to make Elowen distrust Severin and create a public fracture",
+        "speech_style": "elegant, sympathetic, gently poisonous",
+        "boundaries": [
+          "will not reveal his factional role voluntarily",
+          "will avoid direct lies when insinuation can do more damage"
+        ],
+        "values": [
+          "status",
+          "control",
+          "plausible deniability"
+        ]
+      },
+      "stats": {
+        "tags": [
+          "courtier",
+          "marriage-saboteur",
+          "ashen-court-agent"
+        ]
+      },
+      "initial_status": "active",
+      "initial_location_id": "frostmere-citadel",
+      "initial_visible_to_player": true
+    },
+    {
+      "id": "sister-adela",
+      "name": "Sister Adela Thorn",
+      "description": "The head caretaker of the Winter Orphan House. She speaks with the calm certainty of someone who has seen the Archduke's private generosity many times and has no need to flatter him.",
+      "role_identity": {
+        "core_emotion": "quiet steadiness",
+        "motivation": "protect the children and speak honestly when asked",
+        "worldview": "nobility reveals itself in what power does when no applause is expected",
+        "fear": "the orphan house becoming a political symbol and losing its safety",
+        "desire": "for the princess to judge Falkenmark by deeds",
+        "speech_style": "gentle, plain, morally direct",
+        "boundaries": [
+          "will not weaponize children in court politics",
+          "will not embellish the Archduke's virtues"
+        ],
+        "values": [
+          "mercy",
+          "truth",
+          "care for the vulnerable"
+        ]
+      },
+      "stats": {
+        "tags": [
+          "caretaker",
+          "public-truth-witness",
+          "reputation-counterweight"
+        ]
+      },
+      "initial_status": "active",
+      "initial_location_id": "winter-orphan-house",
+      "initial_visible_to_player": false
+    },
+    {
+      "id": "prince-bastien",
+      "name": "Prince Bastien Arclaine",
+      "description": "The princess's older brother, remaining in the capital but represented through letters and political pressure. His affection for Elowen is real, but he has internalized the same imperial logic that treats her marriage as necessary policy.",
+      "role_identity": {
+        "core_emotion": "conflicted concern",
+        "motivation": "support imperial stability while convincing himself Elowen's sacrifice is noble and necessary",
+        "worldview": "royal children are born into duties others cannot carry",
+        "fear": "the empire collapsing if Severin withdraws support",
+        "desire": "for Elowen to endure the marriage and eventually forgive the family",
+        "speech_style": "warm but formal, guilt hidden beneath reassurance",
+        "boundaries": [
+          "will not knowingly order harm against Elowen",
+          "will minimize the emperor's manipulation unless directly challenged"
+        ],
+        "values": [
+          "family",
+          "dynasty",
+          "stability"
+        ]
+      },
+      "stats": {
+        "tags": [
+          "imperial-prince",
+          "offscreen-correspondent",
+          "family-pressure"
+        ]
+      },
+      "initial_status": "active",
+      "initial_visible_to_player": false
+    }
+  ],
+  "quests": [
+    {
+      "id": "endure-arrival",
+      "title": "Arrive at Frostmere",
+      "description": "Survive the first audience with Archduke Severin, maintain the dignity of the imperial house, and decide what first impression the princess leaves behind.",
+      "objectives": [
+        {
+          "id": "meet-archduke",
+          "title": "Meet Archduke Severin Falkenrath",
+          "completed": false
+        },
+        {
+          "id": "choose-first-tone",
+          "title": "Establish the princess's opening stance: cautious, defiant, formal, or curious",
+          "completed": false
+        }
+      ],
+      "visible": true
+    },
+    {
+      "id": "judge-the-rumors",
+      "title": "Judge the Blood Archduke",
+      "description": "Investigate whether the terrifying stories about Severin are truth, exaggeration, or deliberate political lies.",
+      "objectives": [
+        {
+          "id": "observe-household",
+          "title": "Observe how Frostmere's servants and soldiers speak of their lord",
+          "completed": false
+        },
+        {
+          "id": "visit-market",
+          "title": "Hear what ordinary people in Greycrown say about the Archduke",
+          "completed": false
+        },
+        {
+          "id": "question-violent-rumors",
+          "title": "Find evidence behind at least one specific rumor of Severin's cruelty",
+          "completed": false
+        }
+      ],
+      "visible": true
+    },
+    {
+      "id": "survive-betrothal-politics",
+      "title": "Survive the Betrothal Court",
+      "description": "Navigate the political forces surrounding the arranged marriage before they turn mistrust into disaster.",
+      "objectives": [
+        {
+          "id": "identify-saboteur",
+          "title": "Identify who is actively trying to poison the princess's view of Severin",
+          "completed": false
+        },
+        {
+          "id": "protect-reputation",
+          "title": "Prevent a public scandal from damaging the alliance",
+          "completed": false
+        },
+        {
+          "id": "understand-emperors-plan",
+          "title": "Learn what the emperor truly expects from this marriage",
+          "completed": false
+        }
+      ],
+      "visible": true
+    },
+    {
+      "id": "define-the-marriage",
+      "title": "Define the Marriage",
+      "description": "Decide whether the arranged union will become a cold political pact, a mutual alliance, a romance built on trust, or something that breaks entirely.",
+      "objectives": [
+        {
+          "id": "earn-or-reject-trust",
+          "title": "Choose whether to earn Severin's trust, keep emotional distance, or oppose him",
+          "completed": false
+        },
+        {
+          "id": "speak-about-freedom",
+          "title": "Confront the question of personal choice inside an arranged marriage",
+          "completed": false
+        },
+        {
+          "id": "approach-oaths",
+          "title": "Reach the wedding vows with a defined personal stance",
+          "completed": false
+        }
+      ],
+      "visible": true
+    }
+  ],
+  "secrets": [
+    {
+      "id": "children-rumor-truth",
+      "text": "The rumor that Severin eats children originated from deliberate slander. In reality, he funds and protects orphan houses for children displaced by border wars, and personally ordered several noble estates seized to pay for them.",
+      "reveal_conditions": [
+        "the player visits the Winter Orphan House or questions credible Falkenmark witnesses about the rumor"
+      ]
+    },
+    {
+      "id": "heads-rumor-truth",
+      "text": "Severin did order the execution of three noble warlords years ago, but only after they massacred surrendered villages, broke sworn oaths, and were convicted before a military tribunal. The court rumor that he beheads anyone who disagrees with him is a deliberate distortion.",
+      "reveal_conditions": [
+        "the player investigates the origin of the severed-head rumor, questions Captain Roderic, or gains access to military records in the war room"
+      ]
+    },
+    {
+      "id": "imperial-marriage-motive",
+      "text": "Emperor Hadrian arranged the marriage primarily to bind Severin's military and magical power to the weakening imperial throne. Elowen's happiness was treated as secondary to political necessity.",
+      "reveal_conditions": [
+        "the player obtains private imperial correspondence, confronts a trusted imperial envoy, or pieces together the emperor's strategic motive through multiple conversations"
+      ]
+    },
+    {
+      "id": "severin-fears-being-used",
+      "text": "Severin agreed to the marriage because refusing would destabilize the north, but he suspects the princess may have been sent as a soft instrument of imperial control. He is watching for manipulation more than he is seeking affection.",
+      "reveal_conditions": [
+        "the player earns Severin's trust in private conversation or witnesses a discussion between him and his inner household"
+      ]
+    },
+    {
+      "id": "ysabet-informant",
+      "text": "Lady Ysabet Vale has been instructed to report privately to the imperial court on the princess's emotional state, Severin's vulnerabilities, and any sign that Elowen might side with Falkenmark over the crown.",
+      "reveal_conditions": [
+        "the player intercepts one of Ysabet's reports, notices inconsistencies in her advice, or confronts her after acquiring corroborating evidence"
+      ]
+    },
+    {
+      "id": "cassian-sabotage",
+      "text": "Lord Cassian Valehart is working for the Ashen Court to sabotage the marriage. His strategy is to keep Elowen frightened, provoke Severin into public coldness, and create the appearance that the union is unsafe.",
+      "reveal_conditions": [
+        "the player catches Cassian coordinating rumors, discovers forged letters, or exposes his role through contradictions in his claims"
+      ]
+    },
+    {
+      "id": "banquet-plot",
+      "text": "A poisoning attempt is being prepared during the betrothal banquet. The conspirators intend for suspicion to fall on Falkenrath household staff, causing imperial outrage and rupturing the alliance.",
+      "reveal_conditions": [
+        "the player investigates rising sabotage signs, questions guards or servants after suspicious incidents, or identifies Ashen Court coordination before the banquet"
+      ]
+    }
+  ],
+  "clocks": [
+    {
+      "id": "wedding-approaches",
+      "title": "The wedding date approaches",
+      "current": 1,
+      "max": 6,
+      "consequence": "The marriage ceremony proceeds before the princess has fully resolved whether she trusts Severin or understands the political trap around her."
+    },
+    {
+      "id": "sabotage-escalates",
+      "title": "The Ashen Court's sabotage escalates",
+      "current": 1,
+      "max": 6,
+      "consequence": "A major scandal or staged attack erupts, threatening to destroy the alliance and frame House Falkenrath."
+    },
+    {
+      "id": "imperial-pressure",
+      "title": "Imperial pressure tightens",
+      "current": 2,
+      "max": 6,
+      "consequence": "The emperor's agents begin pushing openly for compliance, narrowing Elowen's room to delay, investigate, or renegotiate the marriage."
+    },
+    {
+      "id": "northern-trust",
+      "title": "Falkenmark judges the princess",
+      "current": 1,
+      "max": 6,
+      "consequence": "If mishandled, the people and household of Falkenmark come to see Elowen as an imperial pawn rather than a future archduchess."
+    }
+  ]
+}

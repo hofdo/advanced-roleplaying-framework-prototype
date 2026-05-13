@@ -152,7 +152,8 @@ pub fn changed_entities(state: &WorldState, delta: &ValidatedWorldStateDelta) ->
             | domain::NpcChange::KnowledgeAdded { npc_id, .. }
             | domain::NpcChange::StatusChanged { npc_id, .. }
             | domain::NpcChange::LocationChanged { npc_id, .. }
-            | domain::NpcChange::NoteAdded { npc_id, .. } => npc_id,
+            | domain::NpcChange::NoteAdded { npc_id, .. }
+            | domain::NpcChange::VisibilityChanged { npc_id, .. } => npc_id,
         };
         push_unique(&mut refs, "npc", id);
     }
@@ -310,6 +311,8 @@ mod tests {
                 },
                 stats: None,
                 initial_status: NpcStatus::Active,
+                initial_location_id: None,
+                initial_visible_to_player: true,
             }],
             quests: vec![],
             secrets: vec![],

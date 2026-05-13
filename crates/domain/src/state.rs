@@ -234,6 +234,11 @@ pub enum NpcChange {
         note: String,
         reason: String,
     },
+    VisibilityChanged {
+        npc_id: EntityKey,
+        visible_to_player: bool,
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

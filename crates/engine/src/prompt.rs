@@ -845,6 +845,8 @@ mod tests {
                     },
                     stats: None,
                     initial_status: NpcStatus::Active,
+                    initial_location_id: None,
+                    initial_visible_to_player: true,
                 },
                 status: NpcStatus::Active,
                 attitude_to_player: Some("cautious warmth".into()),

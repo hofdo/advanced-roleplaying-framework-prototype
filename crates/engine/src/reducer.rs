@@ -91,6 +91,15 @@ impl WorldStateReducer for BasicWorldStateReducer {
                         npc.notes.push(note);
                     }
                 }
+                NpcChange::VisibilityChanged {
+                    npc_id,
+                    visible_to_player,
+                    ..
+                } => {
+                    if let Some(npc) = state.npcs.iter_mut().find(|npc| npc.npc_id == npc_id) {
+                        npc.visible_to_player = visible_to_player;
+                    }
+                }
             }
         }
 
@@ -837,11 +846,6 @@ mod tests {
                 },
                 reason: "The player claimed it from the altar.".into(),
             }],
-            npc_changes: vec![NpcChange::NoteAdded {
-                npc_id: "examiner".into(),
-                note: "Still suspects the player is unstable.".into(),
-                reason: "NPC memory should persist.".into(),
-            }],
             faction_changes: vec![
                 FactionChange::PublicNoteAdded {
                     faction_id: "guild".into(),
@@ -865,6 +869,18 @@ mod tests {
                 visible_to_player: false,
                 reason: "The countdown became hidden.".into(),
             }],
+            npc_changes: vec![
+                NpcChange::NoteAdded {
+                    npc_id: "examiner".into(),
+                    note: "Still suspects the player is unstable.".into(),
+                    reason: "NPC memory should persist.".into(),
+                },
+                NpcChange::VisibilityChanged {
+                    npc_id: "examiner".into(),
+                    visible_to_player: false,
+                    reason: "The examiner slipped out of player view.".into(),
+                },
+            ],
             ..WorldStateDelta::default()
         });
 
@@ -878,10 +894,8 @@ mod tests {
         );
         assert_eq!(next.inventory.len(), 1);
         assert_eq!(next.inventory[0].id, "ritual-knife");
-        assert_eq!(
-            next.npcs[0].notes,
-            vec!["Still suspects the player is unstable."]
-        );
+        assert_eq!(next.npcs[0].notes, vec!["Still suspects the player is unstable."]);
+        assert!(!next.npcs[0].visible_to_player);
         assert_eq!(
             next.factions[0].public_notes,
             vec!["Publicly warned the hall."]

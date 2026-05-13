@@ -40,6 +40,7 @@ mod tests {
             sample_names(),
             vec![
                 "ashfall-murder",
+                "bride-of-the-iron-archduke",
                 "chosen-beyond-goddess",
                 "glass-senate-crisis"
             ]
@@ -68,6 +69,7 @@ mod tests {
         let message = err.to_string();
 
         assert!(message.contains("ashfall-murder"));
+        assert!(message.contains("bride-of-the-iron-archduke"));
         assert!(message.contains("chosen-beyond-goddess"));
         assert!(message.contains("glass-senate-crisis"));
     }
@@ -78,5 +80,12 @@ mod tests {
         let scenario: Scenario = serde_json::from_str(template).expect("template should parse");
 
         domain::validate_scenario(&scenario).expect("template should validate");
+    }
+
+    #[test]
+    fn bride_of_the_iron_archduke_opens_with_marta() {
+        let scenario = build_sample("bride-of-the-iron-archduke").expect("sample should build");
+
+        assert_eq!(scenario.npcs.first().map(|npc| npc.id.as_str()), Some("steward-marta"));
     }
 }

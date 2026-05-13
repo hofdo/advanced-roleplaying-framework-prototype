@@ -105,7 +105,8 @@ impl DeltaValidator for BasicDeltaValidator {
                 | NpcChange::KnowledgeAdded { npc_id, .. }
                 | NpcChange::StatusChanged { npc_id, .. }
                 | NpcChange::LocationChanged { npc_id, .. }
-                | NpcChange::NoteAdded { npc_id, .. } => npc_id,
+                | NpcChange::NoteAdded { npc_id, .. }
+                | NpcChange::VisibilityChanged { npc_id, .. } => npc_id,
             };
 
             match change {
@@ -113,7 +114,8 @@ impl DeltaValidator for BasicDeltaValidator {
                 | NpcChange::KnowledgeAdded { reason, .. }
                 | NpcChange::StatusChanged { reason, .. }
                 | NpcChange::LocationChanged { reason, .. }
-                | NpcChange::NoteAdded { reason, .. } => {
+                | NpcChange::NoteAdded { reason, .. }
+                | NpcChange::VisibilityChanged { reason, .. } => {
                     require_known("npc", npc_id, &npc_ids)?;
                     require_reason(reason)?;
                 }
@@ -142,6 +144,7 @@ impl DeltaValidator for BasicDeltaValidator {
                         }
                     }
                     NpcChange::NoteAdded { .. } => {}
+                    NpcChange::VisibilityChanged { .. } => {}
                     NpcChange::StatusChanged { .. } => {} // Always allowed — this is how you change status
                 }
             }
@@ -469,6 +472,8 @@ mod tests {
                 },
                 stats: None,
                 initial_status: NpcStatus::Active,
+                initial_location_id: None,
+                initial_visible_to_player: true,
             }],
             quests: vec![Quest {
                 id: "register".into(),
@@ -982,6 +987,22 @@ mod tests {
         };
 
         let result = BasicDeltaValidator.validate(&scenario(), &world, &delta);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validates_npc_visibility_change() {
+        let delta = WorldStateDelta {
+            npc_changes: vec![NpcChange::VisibilityChanged {
+                npc_id: "examiner".into(),
+                visible_to_player: false,
+                reason: "The examiner withdrew from the visible scene.".into(),
+            }],
+            ..WorldStateDelta::default()
+        };
+
+        let result = BasicDeltaValidator.validate(&scenario(), &state(), &delta);
 
         assert!(result.is_ok());
     }

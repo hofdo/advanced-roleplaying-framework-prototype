@@ -56,6 +56,14 @@ pub struct Npc {
     pub role_identity: RoleIdentity,
     pub stats: Option<CharacterStats>,
     pub initial_status: NpcStatus,
+    #[serde(default)]
+    pub initial_location_id: Option<EntityKey>,
+    #[serde(default = "default_initial_visible_to_player")]
+    pub initial_visible_to_player: bool,
+}
+
+fn default_initial_visible_to_player() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

@@ -56,6 +56,8 @@ fn scenario() -> Scenario {
             role_identity: role_identity(),
             stats: None,
             initial_status: NpcStatus::Active,
+            initial_location_id: None,
+            initial_visible_to_player: true,
         }],
         quests: vec![Quest {
             id: "choose-class".into(),
@@ -89,6 +91,8 @@ fn scenario_validation_rejects_duplicate_entity_ids() {
         role_identity: role_identity(),
         stats: None,
         initial_status: NpcStatus::Active,
+        initial_location_id: None,
+        initial_visible_to_player: true,
     });
 
     let err = validate_scenario(&scenario).expect_err("duplicate ID must be rejected");
@@ -107,6 +111,16 @@ fn scenario_validation_rejects_clock_values_above_max() {
         err.to_string()
             .contains("clock player-fame-spreads current exceeds max")
     );
+}
+
+#[test]
+fn scenario_validation_rejects_unknown_initial_npc_location() {
+    let mut scenario = scenario();
+    scenario.npcs[0].initial_location_id = Some("missing-location".into());
+
+    let err = validate_scenario(&scenario).expect_err("unknown NPC location must be rejected");
+
+    assert!(err.to_string().contains("unknown location id missing-location"));
 }
 
 #[test]

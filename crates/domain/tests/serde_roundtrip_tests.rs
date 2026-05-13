@@ -71,6 +71,19 @@ fn npc_note_added_roundtrips() {
     assert!(json.contains(r#""type":"note_added""#));
 }
 
+#[test]
+fn npc_visibility_changed_roundtrips() {
+    let change = NpcChange::VisibilityChanged {
+        npc_id: "npc-6".into(),
+        visible_to_player: false,
+        reason: "The NPC should remain hidden until introduced".into(),
+    };
+    let json = serde_json::to_string(&change).unwrap();
+    let round: NpcChange = serde_json::from_str(&json).unwrap();
+    assert_eq!(change, round);
+    assert!(json.contains(r#""type":"visibility_changed""#));
+}
+
 // ── FactionChange ─────────────────────────────────────────────────────────────
 
 #[test]
