@@ -17,6 +17,9 @@ shared.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 
+[features]
+test-fixtures = []
+
 [dev-dependencies]
 tokio.workspace = true
 wiremock.workspace = true

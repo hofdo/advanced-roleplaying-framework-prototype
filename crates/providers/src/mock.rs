@@ -89,6 +89,78 @@ impl LlmProvider for MockProvider {
     }
 }
 
+/// Thin test-only wrapper around `MockProvider` that records every `LlmRequest`
+/// it receives on a shared `Arc<Mutex<Vec<_>>>` before delegating to the inner
+/// mock.  Lets pipeline/API tests assert call count and per-call request shape
+/// (e.g. that the first non-streaming call does not contain GM-only facts).
+#[cfg(any(test, feature = "test-fixtures"))]
+#[derive(Debug, Clone)]
+pub struct RecordingMockProvider {
+    inner: MockProvider,
+    requests: Arc<Mutex<Vec<LlmRequest>>>,
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+impl RecordingMockProvider {
+    pub fn new(name: impl Into<String>, responses: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            inner: MockProvider::new(name, responses),
+            requests: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    pub fn from_mock(inner: MockProvider) -> Self {
+        Self {
+            inner,
+            requests: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    pub fn requests(&self) -> Arc<Mutex<Vec<LlmRequest>>> {
+        Arc::clone(&self.requests)
+    }
+
+    pub fn recorded(&self) -> Vec<LlmRequest> {
+        self.requests.lock().expect("requests mutex").clone()
+    }
+
+    pub fn push_response(&self, response: impl Into<String>) {
+        self.inner.push_response(response);
+    }
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+#[async_trait]
+impl LlmProvider for RecordingMockProvider {
+    async fn health(&self) -> Result<ProviderHealth, ProviderError> {
+        self.inner.health().await
+    }
+
+    async fn readiness(&self) -> Result<ProviderReadiness, ProviderError> {
+        self.inner.readiness().await
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        self.inner.capabilities()
+    }
+
+    async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, ProviderError> {
+        self.requests
+            .lock()
+            .expect("requests mutex")
+            .push(request.clone());
+        self.inner.generate(request).await
+    }
+
+    async fn stream(&self, request: LlmRequest) -> Result<TokenStream, ProviderError> {
+        self.requests
+            .lock()
+            .expect("requests mutex")
+            .push(request.clone());
+        self.inner.stream(request).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

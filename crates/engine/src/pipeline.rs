@@ -362,6 +362,49 @@ where
         )
     }
 
+    /// Run a non-streaming turn as two sequential provider calls:
+    /// 1. Visible narration (narration-safe context, no GM-only facts).
+    /// 2. Delta extraction (oracle context with GM-only facts + the visible
+    ///    response).  Returns the visible text, the raw delta JSON, and the
+    ///    raw provider output for the visible call.
+    async fn run_two_call_generation(
+        &self,
+        session_id: SessionId,
+        prepared: &PreparedTurn,
+        player_input: &str,
+    ) -> Result<TwoCallOutput, TurnPipelineError> {
+        let visible_prompt = self
+            .prompt_builder
+            .build_visible_response_prompt(&prepared.context, player_input);
+        tracing::info!("provider_called");
+        self.record_pipeline_event(session_id, PipelineEventKind::ProviderCalled)
+            .await?;
+        let visible_response = self.provider.generate(visible_prompt).await?;
+        self.record_pipeline_event(session_id, PipelineEventKind::ProviderResponded)
+            .await?;
+        let visible_text = unquote_json_string(&visible_response.text);
+        let stripped_visible = self.stripper.strip(&visible_text);
+
+        let delta_prompt = self.prompt_builder.build_delta_extraction_prompt(
+            &prepared.context,
+            player_input,
+            &stripped_visible,
+        );
+        self.record_pipeline_event(session_id, PipelineEventKind::ProviderCalled)
+            .await?;
+        let delta_response = self.provider.generate(delta_prompt).await?;
+        self.record_pipeline_event(session_id, PipelineEventKind::ProviderResponded)
+            .await?;
+
+        Ok(TwoCallOutput {
+            stripped_visible,
+            raw_delta_text: delta_response.text,
+            visible_raw_provider_output: visible_response
+                .raw_json
+                .unwrap_or_else(|| serde_json::Value::String(visible_response.text)),
+        })
+    }
+
     #[instrument(skip_all, fields(session_id = %request.session_id))]
     pub async fn process_turn(
         &self,
@@ -375,7 +418,6 @@ where
         self.record_pipeline_event(request.session_id, PipelineEventKind::TurnLockAcquired)
             .await?;
 
-        // --- Preparation: load state, classify scene, build context ---
         let prepared = self
             .prepare_turn_context(request.session_id, &request.input, request.mode)
             .await?;
@@ -383,42 +425,22 @@ where
         self.record_pipeline_event(request.session_id, PipelineEventKind::ContextBuilt)
             .await?;
 
-        // --- Non-streaming provider call: emits player_response + delta JSON ---
-        let prompt = self
-            .prompt_builder
-            .build_non_streaming_prompt(&prepared.context, &request.input);
-        tracing::info!("provider_called");
-        self.record_pipeline_event(request.session_id, PipelineEventKind::ProviderCalled)
+        let two_call = self
+            .run_two_call_generation(request.session_id, &prepared, &request.input)
             .await?;
-        let provider_response = self.provider.generate(prompt).await?;
-        self.record_pipeline_event(request.session_id, PipelineEventKind::ProviderResponded)
-            .await?;
-        let output = match self.parser.parse_turn_output(&provider_response.text) {
-            Ok(output) => output,
-            Err(error) => {
-                self.store
-                    .persist_error_event(request.session_id, error.to_string())
-                    .await?;
-                return Err(error.into());
-            }
-        };
-        let player_response = self.stripper.strip(&output.player_response);
 
-        // --- Finalization: validate delta, reduce, project, build records ---
-        let finalized = self.finalize_with_parsed_delta(
-            request.session_id,
-            &prepared,
-            &player_response,
-            output.world_state_delta,
-            &request.input,
-            &request.viewer,
-        )?;
+        let finalized = self
+            .finalize_turn_delta(
+                request.session_id,
+                &prepared,
+                &two_call.stripped_visible,
+                &two_call.raw_delta_text,
+                &request.input,
+                &request.viewer,
+            )
+            .await?;
         let mut finalized = finalized;
-        finalized.assistant_message.raw_provider_output = Some(
-            provider_response
-                .raw_json
-                .unwrap_or_else(|| serde_json::Value::String(provider_response.text)),
-        );
+        finalized.assistant_message.raw_provider_output = Some(two_call.visible_raw_provider_output);
         tracing::info!("delta_applied");
         self.record_pipeline_event(request.session_id, PipelineEventKind::DeltaApplied)
             .await?;
@@ -472,40 +494,23 @@ where
         self.record_pipeline_event(request.session_id, PipelineEventKind::ContextBuilt)
             .await?;
 
-        let prompt = self
-            .prompt_builder
-            .build_non_streaming_prompt(&prepared.context, &request.input);
-        self.record_pipeline_event(request.session_id, PipelineEventKind::ProviderCalled)
+        let two_call = self
+            .run_two_call_generation(request.session_id, &prepared, &request.input)
             .await?;
-        let provider_response = self.provider.generate(prompt).await?;
-        self.record_pipeline_event(request.session_id, PipelineEventKind::ProviderResponded)
-            .await?;
-        let output = match self.parser.parse_turn_output(&provider_response.text) {
-            Ok(output) => output,
-            Err(error) => {
-                self.store
-                    .persist_error_event(request.session_id, error.to_string())
-                    .await?;
-                return Err(error.into());
-            }
-        };
-        let player_response = self.stripper.strip(&output.player_response);
-        let raw_delta = output.world_state_delta.clone();
 
-        let finalized = self.finalize_with_parsed_delta(
-            request.session_id,
-            &prepared,
-            &player_response,
-            output.world_state_delta,
-            &request.input,
-            &request.viewer,
-        )?;
+        let finalized = self
+            .finalize_turn_delta(
+                request.session_id,
+                &prepared,
+                &two_call.stripped_visible,
+                &two_call.raw_delta_text,
+                &request.input,
+                &request.viewer,
+            )
+            .await?;
         let mut finalized = finalized;
-        finalized.assistant_message.raw_provider_output = Some(
-            provider_response
-                .raw_json
-                .unwrap_or_else(|| serde_json::Value::String(provider_response.text)),
-        );
+        finalized.assistant_message.raw_provider_output = Some(two_call.visible_raw_provider_output);
+        let applied_delta = finalized.validated_delta.0.clone();
         self.record_pipeline_event(request.session_id, PipelineEventKind::DeltaApplied)
             .await?;
         self.record_pipeline_event(
@@ -538,9 +543,28 @@ where
                 changed_entities: finalized.frontend_state_patch.changed_entities.clone(),
                 frontend_state_patch: finalized.frontend_state_patch,
             },
-            applied_delta: raw_delta,
+            applied_delta,
         })
     }
+}
+
+struct TwoCallOutput {
+    stripped_visible: String,
+    raw_delta_text: String,
+    visible_raw_provider_output: serde_json::Value,
+}
+
+/// If `text` is a valid JSON string literal (e.g. providers that misuse JSON
+/// mode for free narration may wrap output in quotes), decode it back to plain
+/// text.  Otherwise return the input unchanged.
+fn unquote_json_string(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2 {
+        if let Ok(serde_json::Value::String(decoded)) = serde_json::from_str(trimmed) {
+            return decoded;
+        }
+    }
+    text.to_owned()
 }
 
 #[derive(Debug, Error)]
@@ -710,24 +734,25 @@ mod tests {
             scenario,
             recent_messages: vec![],
         }));
-        let raw = r#"{
-            "player_response": "The guildhall falls silent.",
-            "world_state_delta": {
-                "facts_to_add": [],
-                "npc_changes": [],
-                "faction_changes": [
-                    {"type":"standing_changed","faction_id":"guild","standing_delta":-5,"reason":"The player caused panic."}
-                ],
-                "quest_changes": [],
-                "clock_changes": [
-                    {"type":"advanced","clock_id":"fame","delta":1,"reason":"Many witnesses saw the mana surge."}
-                ],
-                "relationship_changes": [],
-                "location_change": null,
-                "event_log_entries": ["The player revealed abnormal mana."]
-            }
+        let visible = "The guildhall falls silent.";
+        let delta_json = r#"{
+            "facts_to_add": [],
+            "npc_changes": [],
+            "faction_changes": [
+                {"type":"standing_changed","faction_id":"guild","standing_delta":-5,"reason":"The player caused panic."}
+            ],
+            "quest_changes": [],
+            "clock_changes": [
+                {"type":"advanced","clock_id":"fame","delta":1,"reason":"Many witnesses saw the mana surge."}
+            ],
+            "relationship_changes": [],
+            "location_change": null,
+            "event_log_entries": ["The player revealed abnormal mana."]
         }"#;
-        let provider = Arc::new(MockProvider::new("mock", [raw.into()]));
+        let provider = Arc::new(MockProvider::new(
+            "mock",
+            [visible.into(), delta_json.into()],
+        ));
         let pipeline = DefaultTurnPipeline::new(provider, Arc::clone(&store));
 
         let response = pipeline
@@ -767,20 +792,21 @@ mod tests {
             scenario,
             recent_messages: vec![],
         }));
-        let raw = r#"{
-            "player_response": "The guildhall falls silent.",
-            "world_state_delta": {
-                "facts_to_add": [],
-                "npc_changes": [],
-                "faction_changes": [],
-                "quest_changes": [],
-                "clock_changes": [],
-                "relationship_changes": [],
-                "location_change": null,
-                "event_log_entries": []
-            }
+        let visible = "The guildhall falls silent.";
+        let delta_json = r#"{
+            "facts_to_add": [],
+            "npc_changes": [],
+            "faction_changes": [],
+            "quest_changes": [],
+            "clock_changes": [],
+            "relationship_changes": [],
+            "location_change": null,
+            "event_log_entries": []
         }"#;
-        let provider = Arc::new(MockProvider::new("mock", [raw.into()]));
+        let provider = Arc::new(MockProvider::new(
+            "mock",
+            [visible.into(), delta_json.into()],
+        ));
         let pipeline = DefaultTurnPipeline::new(provider, Arc::clone(&store));
 
         pipeline
@@ -813,20 +839,21 @@ mod tests {
             scenario,
             recent_messages: vec![],
         }));
-        let raw = r#"{
-            "player_response": "The guildhall falls silent.",
-            "world_state_delta": {
-                "facts_to_add": [],
-                "npc_changes": [],
-                "faction_changes": [],
-                "quest_changes": [],
-                "clock_changes": [],
-                "relationship_changes": [],
-                "location_change": null,
-                "event_log_entries": []
-            }
+        let visible = "The guildhall falls silent.";
+        let delta_json = r#"{
+            "facts_to_add": [],
+            "npc_changes": [],
+            "faction_changes": [],
+            "quest_changes": [],
+            "clock_changes": [],
+            "relationship_changes": [],
+            "location_change": null,
+            "event_log_entries": []
         }"#;
-        let provider = Arc::new(MockProvider::new("mock", [raw.into()]));
+        let provider = Arc::new(MockProvider::new(
+            "mock",
+            [visible.into(), delta_json.into()],
+        ));
         let pipeline = DefaultTurnPipeline::new(provider, Arc::clone(&store));
 
         pipeline
@@ -882,24 +909,25 @@ mod tests {
             scenario,
             recent_messages: vec![],
         }));
-        let raw = r#"{
-            "player_response": "You remain unharmed, but the guildhall erupts into alarm as examiners shield civilians and runners bolt for senior officials.",
-            "world_state_delta": {
-                "facts_to_add": [],
-                "npc_changes": [],
-                "faction_changes": [
-                    {"type":"standing_changed","faction_id":"guild","standing_delta":-5,"reason":"The display caused panic and forced the guild to treat the player as a public risk."}
-                ],
-                "quest_changes": [],
-                "clock_changes": [
-                    {"type":"advanced","clock_id":"fame","delta":1,"reason":"Multiple witnesses saw impossible mana flood the guildhall."}
-                ],
-                "relationship_changes": [],
-                "location_change": null,
-                "event_log_entries": ["The player revealed abnormal mana during guild registration."]
-            }
+        let visible = "You remain unharmed, but the guildhall erupts into alarm as examiners shield civilians and runners bolt for senior officials.";
+        let delta_json = r#"{
+            "facts_to_add": [],
+            "npc_changes": [],
+            "faction_changes": [
+                {"type":"standing_changed","faction_id":"guild","standing_delta":-5,"reason":"The display caused panic and forced the guild to treat the player as a public risk."}
+            ],
+            "quest_changes": [],
+            "clock_changes": [
+                {"type":"advanced","clock_id":"fame","delta":1,"reason":"Multiple witnesses saw impossible mana flood the guildhall."}
+            ],
+            "relationship_changes": [],
+            "location_change": null,
+            "event_log_entries": ["The player revealed abnormal mana during guild registration."]
         }"#;
-        let provider = Arc::new(MockProvider::new("mock", [raw.into()]));
+        let provider = Arc::new(MockProvider::new(
+            "mock",
+            [visible.into(), delta_json.into()],
+        ));
         let pipeline = DefaultTurnPipeline::new(provider, Arc::clone(&store));
 
         let response = pipeline
@@ -1053,20 +1081,21 @@ mod tests {
             scenario,
             recent_messages: vec![],
         }));
-        let raw = r#"{
-            "player_response": "The examiner nods cautiously.",
-            "world_state_delta": {
-                "facts_to_add": [],
-                "npc_changes": [],
-                "faction_changes": [{"type":"standing_changed","faction_id":"guild","standing_delta":-3,"reason":"Suspicious behavior."}],
-                "quest_changes": [],
-                "clock_changes": [],
-                "relationship_changes": [],
-                "location_change": null,
-                "event_log_entries": []
-            }
+        let visible = "The examiner nods cautiously.";
+        let delta_json = r#"{
+            "facts_to_add": [],
+            "npc_changes": [],
+            "faction_changes": [{"type":"standing_changed","faction_id":"guild","standing_delta":-3,"reason":"Suspicious behavior."}],
+            "quest_changes": [],
+            "clock_changes": [],
+            "relationship_changes": [],
+            "location_change": null,
+            "event_log_entries": []
         }"#;
-        let provider = Arc::new(MockProvider::new("mock", [raw.into()]));
+        let provider = Arc::new(MockProvider::new(
+            "mock",
+            [visible.into(), delta_json.into()],
+        ));
         let pipeline = DefaultTurnPipeline::new(provider, Arc::clone(&store));
 
         let result = pipeline
@@ -1098,20 +1127,21 @@ mod tests {
             scenario,
             recent_messages: vec![],
         }));
-        let raw = r#"{
-            "player_response": "The examiner nods cautiously.",
-            "world_state_delta": {
-                "facts_to_add": [],
-                "npc_changes": [],
-                "faction_changes": [{"type":"standing_changed","faction_id":"guild","standing_delta":-3,"reason":"Suspicious behavior."}],
-                "quest_changes": [],
-                "clock_changes": [],
-                "relationship_changes": [],
-                "location_change": null,
-                "event_log_entries": []
-            }
+        let visible = "The examiner nods cautiously.";
+        let delta_json = r#"{
+            "facts_to_add": [],
+            "npc_changes": [],
+            "faction_changes": [{"type":"standing_changed","faction_id":"guild","standing_delta":-3,"reason":"Suspicious behavior."}],
+            "quest_changes": [],
+            "clock_changes": [],
+            "relationship_changes": [],
+            "location_change": null,
+            "event_log_entries": []
         }"#;
-        let provider = Arc::new(MockProvider::new("mock", [raw.into()]));
+        let provider = Arc::new(MockProvider::new(
+            "mock",
+            [visible.into(), delta_json.into()],
+        ));
         let pipeline = DefaultTurnPipeline::new(provider, Arc::clone(&store));
 
         pipeline
