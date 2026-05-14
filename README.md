@@ -411,6 +411,21 @@ Recent hardening work also added stricter checks around direct revelation of GM-
 
 ## Testing
 
+### Continuous integration
+
+Two GitHub Actions workflows cover this repository:
+
+- `.github/workflows/rust.yml` — fast PR check. Runs `cargo fmt`, `cargo check --workspace`, and `cargo test --workspace`. Mirrors the local "normal test suite" command.
+- `.github/workflows/postgres-integration.yml` — Docker-backed deterministic suites. Boots a `postgres:16-alpine` service and runs the ignored `postgres_api_flows`, `behavioral_fixtures`, and persistence `repository_tests` with `--test-threads=1`.
+
+The live local-LLM smoke test (`crates/api/tests/live_llama_postgres_smoke.rs`) is **not** part of deterministic PR CI because it needs a local `llama-server` and a model. Maintainers run it manually via `bash scripts/test-with-local-llm.sh` or directly:
+
+```bash
+TEST_LLM_BASE_URL=http://127.0.0.1:8080/v1 \
+TEST_DATABASE_URL=postgres://roleplay:roleplay@127.0.0.1:5432/roleplay \
+cargo test -p api --test live_llama_postgres_smoke -- --ignored --test-threads=1
+```
+
 ### Run the normal test suite
 
 ```bash
