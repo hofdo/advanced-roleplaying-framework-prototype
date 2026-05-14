@@ -48,6 +48,7 @@ impl Drop for TempScenarioFile {
 fn run_cli(args: &[&str]) -> Output {
     let exe = std::env::var("CARGO_BIN_EXE_rp").expect("rp test binary path");
     std::process::Command::new(exe)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
         .args(args)
         .output()
         .expect("cli process should run")
@@ -273,4 +274,20 @@ fn scenario_validate_reports_valid_and_invalid_files() {
 
     assert!(!invalid_output.status.success());
     assert!(stderr(&invalid_output).contains("duplicate location id"));
+}
+
+#[test]
+fn scenario_inspect_prints_author_facing_summary() {
+    let output = run_cli(&[
+        "scenario",
+        "inspect",
+        "--file",
+        "scenarios/samples/bride-of-the-iron-archduke.json",
+    ]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let rendered = stdout(&output);
+    assert!(rendered.contains("Title: The Bride of the Iron Archduke"));
+    assert!(rendered.contains("Opening location:"));
+    assert!(rendered.contains("Opening speaker:"));
 }

@@ -7,7 +7,7 @@ use crate::{
     bootstrap::CliState,
     render::print_json,
     samples::{build_sample, sample_names},
-    scenario_io::read_scenario_file,
+    scenario_io::{read_scenario_file, scenario_summary},
 };
 
 #[derive(Subcommand, Debug)]
@@ -27,6 +27,12 @@ pub enum Cmd {
         #[arg(long)]
         file: String,
     },
+    /// Print an author-facing summary of a scenario JSON file.
+    Inspect {
+        /// Path to a scenario JSON file.
+        #[arg(long)]
+        file: String,
+    },
     /// List all scenarios.
     List,
     /// Get a scenario by id.
@@ -39,6 +45,7 @@ pub async fn run(state: CliState, cmd: Cmd) -> Result<()> {
     match cmd {
         Cmd::Create { file, sample } => create(state, file, sample).await,
         Cmd::Validate { file } => validate(&file),
+        Cmd::Inspect { file } => inspect(&file),
         Cmd::List => {
             let scenarios = state.store.list_scenarios().await?;
             print_json(&scenarios)
@@ -82,5 +89,11 @@ fn validate(path: &str) -> Result<()> {
     println!("quests: {}", scenario.quests.len());
     println!("secrets: {}", scenario.secrets.len());
     println!("clocks: {}", scenario.clocks.len());
+    Ok(())
+}
+
+fn inspect(path: &str) -> Result<()> {
+    let scenario = read_scenario_file(path)?;
+    println!("{}", scenario_summary(&scenario));
     Ok(())
 }
