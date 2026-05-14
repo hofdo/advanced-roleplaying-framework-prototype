@@ -829,14 +829,10 @@ mod tests {
                 // For one streaming turn: narration tokens, then delta JSON.
                 "The examiner watches in silence.".into(),
                 DELTA_JSON.into(),
-                // For a second non-streaming turn (after /stream off): single
-                // combined player_response + delta payload.
-                format!(
-                    r#"{{
-                        "player_response": "The examiner nods.",
-                        "world_state_delta": {DELTA_JSON}
-                    }}"#
-                ),
+                // For a second non-streaming turn (after /stream off): visible
+                // response first, then delta extraction JSON.
+                "The examiner nods.".into(),
+                DELTA_JSON.into(),
             ],
         ));
         let state = build_test_state(Arc::clone(&provider));

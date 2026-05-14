@@ -70,13 +70,10 @@ fn build_state() -> (
     let provider = Arc::new(MockProvider::new(
         "mock",
         [
-            // For process_turn: combined player_response + delta JSON
-            format!(
-                r#"{{
-                    "player_response": "The examiner watches carefully.",
-                    "world_state_delta": {DELTA_JSON}
-                }}"#
-            ),
+            // Non-streaming turns now use two provider calls: visible response,
+            // then delta extraction JSON.
+            "The examiner watches carefully.".into(),
+            DELTA_JSON.into(),
         ],
     ));
     (store, lock, provider)
