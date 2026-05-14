@@ -1,6 +1,6 @@
 use domain::{
-    Fact, FactVisibility, Faction, FactionState, Location, Npc, NpcStatus, QuestState, Scenario,
-    SceneReasoningStyle, TurnMode, WorldState,
+    Fact, FactVisibility, Faction, FactionState, Location, MemoryEntry, MemoryVisibility, Npc,
+    NpcStatus, QuestState, Scenario, SceneReasoningStyle, TurnMode, WorldState,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -182,6 +182,8 @@ pub struct AgentContext {
     pub active_clocks: Vec<domain::ClockState>,
     pub player_known_facts: Vec<Fact>,
     pub gm_only_facts: Vec<Fact>,
+    pub player_memories: Vec<MemoryEntry>,
+    pub gm_only_memories: Vec<MemoryEntry>,
     pub recent_summary: Option<String>,
     pub recent_messages: Vec<MessageContext>,
     pub rules: Vec<String>,
@@ -298,6 +300,13 @@ impl ContextBuilder for BasicContextBuilder {
             .take(5)
             .cloned()
             .collect();
+        let player_memories = prioritized_memories(
+            &input.world_state.memories,
+            MemoryVisibility::PlayerKnown,
+            8,
+        );
+        let gm_only_memories =
+            prioritized_memories(&input.world_state.memories, MemoryVisibility::GmOnly, 5);
 
         AgentContext {
             scenario_title: input.scenario.title.clone(),
@@ -322,6 +331,8 @@ impl ContextBuilder for BasicContextBuilder {
             active_clocks: input.world_state.clocks.clone(),
             player_known_facts,
             gm_only_facts,
+            player_memories,
+            gm_only_memories,
             recent_summary: input.world_state.summary.clone(),
             recent_messages: input
                 .recent_messages
@@ -338,11 +349,36 @@ impl ContextBuilder for BasicContextBuilder {
     }
 }
 
+fn prioritized_memories(
+    memories: &[MemoryEntry],
+    visibility: MemoryVisibility,
+    limit: usize,
+) -> Vec<MemoryEntry> {
+    let mut indexed = memories
+        .iter()
+        .enumerate()
+        .filter(|(_, memory)| memory.visibility == visibility)
+        .collect::<Vec<_>>();
+    indexed.sort_by(|(left_idx, left), (right_idx, right)| {
+        right
+            .importance
+            .cmp(&left.importance)
+            .then(left_idx.cmp(right_idx))
+    });
+    indexed
+        .into_iter()
+        .take(limit)
+        .map(|(_, memory)| memory.clone())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use domain::fixtures;
-    use domain::{NpcStatus, Scenario, SceneReasoningStyle, WorldState};
+    use domain::{
+        MemoryEntry, MemoryVisibility, NpcStatus, Scenario, SceneReasoningStyle, WorldState,
+    };
 
     fn scenario() -> Scenario {
         let mut scenario = fixtures::scenario()
@@ -407,6 +443,165 @@ mod tests {
             role.forbidden_moves
                 .iter()
                 .any(|item| item.contains("world state"))
+        );
+    }
+
+    #[test]
+    fn build_context_selects_memories_by_visibility_and_importance() {
+        let scenario = scenario();
+        let mut world = state(NpcStatus::Active);
+        world.memories = vec![
+            MemoryEntry {
+                id: "p1".into(),
+                text: "low".into(),
+                visibility: MemoryVisibility::PlayerKnown,
+                importance: 1,
+                related_entity_ids: vec![],
+                source_message_id: None,
+            },
+            MemoryEntry {
+                id: "p2".into(),
+                text: "high-a".into(),
+                visibility: MemoryVisibility::PlayerKnown,
+                importance: 9,
+                related_entity_ids: vec![],
+                source_message_id: None,
+            },
+            MemoryEntry {
+                id: "p3".into(),
+                text: "high-b".into(),
+                visibility: MemoryVisibility::PlayerKnown,
+                importance: 9,
+                related_entity_ids: vec![],
+                source_message_id: None,
+            },
+            MemoryEntry {
+                id: "p4".into(),
+                text: "mid".into(),
+                visibility: MemoryVisibility::PlayerKnown,
+                importance: 4,
+                related_entity_ids: vec![],
+                source_message_id: None,
+            },
+            MemoryEntry {
+                id: "p5".into(),
+                text: "upper".into(),
+                visibility: MemoryVisibility::PlayerKnown,
+                importance: 7,
+                related_entity_ids: vec![],
+                source_message_id: None,
+            },
+            MemoryEntry {
+                id: "p6".into(),
+                text: "lower".into(),
+                visibility: MemoryVisibility::PlayerKnown,
+                importance: 3,
+                related_entity_ids: vec![],
+                source_message_id: None,
+            },
+            MemoryEntry {
+                id: "p7".into(),
+                text: "upper-mid".into(),
+                visibility: MemoryVisibility::PlayerKnown,
+                importance: 6,
+                related_entity_ids: vec![],
+                source_message_id: None,
+            },
+            MemoryEntry {
+                id: "p8".into(),
+                text: "tiny".into(),
+                visibility: MemoryVisibility::PlayerKnown,
+                importance: 2,
+                related_entity_ids: vec![],
+                source_message_id: None,
+            },
+            MemoryEntry {
+                id: "p9".into(),
+                text: "very-high".into(),
+                visibility: MemoryVisibility::PlayerKnown,
+                importance: 8,
+                related_entity_ids: vec![],
+                source_message_id: None,
+            },
+            MemoryEntry {
+                id: "g1".into(),
+                text: "gm-low".into(),
+                visibility: MemoryVisibility::GmOnly,
+                importance: 2,
+                related_entity_ids: vec![],
+                source_message_id: None,
+            },
+            MemoryEntry {
+                id: "g2".into(),
+                text: "gm-high-a".into(),
+                visibility: MemoryVisibility::GmOnly,
+                importance: 10,
+                related_entity_ids: vec![],
+                source_message_id: None,
+            },
+            MemoryEntry {
+                id: "g3".into(),
+                text: "gm-high-b".into(),
+                visibility: MemoryVisibility::GmOnly,
+                importance: 10,
+                related_entity_ids: vec![],
+                source_message_id: None,
+            },
+            MemoryEntry {
+                id: "g4".into(),
+                text: "gm-mid".into(),
+                visibility: MemoryVisibility::GmOnly,
+                importance: 5,
+                related_entity_ids: vec![],
+                source_message_id: None,
+            },
+            MemoryEntry {
+                id: "g5".into(),
+                text: "gm-upper".into(),
+                visibility: MemoryVisibility::GmOnly,
+                importance: 7,
+                related_entity_ids: vec![],
+                source_message_id: None,
+            },
+            MemoryEntry {
+                id: "g6".into(),
+                text: "gm-tiny".into(),
+                visibility: MemoryVisibility::GmOnly,
+                importance: 1,
+                related_entity_ids: vec![],
+                source_message_id: None,
+            },
+        ];
+
+        let context = BasicContextBuilder.build(BuildContextInput {
+            scenario: &scenario,
+            world_state: &world,
+            active_role: BasicRoleIdentityActivator.activate(
+                &scenario,
+                &world,
+                SceneReasoningStyle::CharacterDialogue,
+            ),
+            scene_directive: BasicReasoningStyleOptimizer
+                .directive_for(SceneReasoningStyle::CharacterDialogue),
+            recent_messages: vec![],
+            mode: None,
+        });
+
+        assert_eq!(
+            context
+                .player_memories
+                .iter()
+                .map(|memory| memory.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["p2", "p3", "p9", "p5", "p7", "p4", "p6", "p8"]
+        );
+        assert_eq!(
+            context
+                .gm_only_memories
+                .iter()
+                .map(|memory| memory.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["g2", "g3", "g5", "g4", "g1"]
         );
     }
 }

@@ -153,6 +153,7 @@ pub(super) fn render_context(context: &AgentContext, player_input: &str) -> Stri
             ],
         ),
         render_facts_section(context, player_input, true),
+        render_memory_section(context, true),
         render_single_value_section(
             "RECENT SUMMARY",
             context.recent_summary.as_deref().unwrap_or("none"),
@@ -327,6 +328,7 @@ pub(super) fn render_narration_context(context: &AgentContext, player_input: &st
             ],
         ),
         render_facts_section(context, player_input, false),
+        render_memory_section(context, false),
         render_single_value_section(
             "RECENT SUMMARY",
             context.recent_summary.as_deref().unwrap_or("none"),
@@ -381,6 +383,58 @@ fn render_facts_section(
     } else {
         render_section("RELEVANT FACTS", &[player_known])
     }
+}
+
+fn render_memory_section(context: &AgentContext, include_gm_only: bool) -> String {
+    let player_visible = format!(
+        "Player-visible memory: {}",
+        if context.player_memories.is_empty() {
+            "none".into()
+        } else {
+            context
+                .player_memories
+                .iter()
+                .map(format_memory)
+                .collect::<Vec<_>>()
+                .join(" | ")
+        }
+    );
+
+    if include_gm_only {
+        render_section(
+            "CAMPAIGN MEMORY",
+            &[
+                player_visible,
+                format!(
+                    "GM-only memory: {}",
+                    if context.gm_only_memories.is_empty() {
+                        "none".into()
+                    } else {
+                        context
+                            .gm_only_memories
+                            .iter()
+                            .map(format_memory)
+                            .collect::<Vec<_>>()
+                            .join(" | ")
+                    }
+                ),
+            ],
+        )
+    } else {
+        render_section("CAMPAIGN MEMORY", &[player_visible])
+    }
+}
+
+fn format_memory(memory: &domain::MemoryEntry) -> String {
+    let related = if memory.related_entity_ids.is_empty() {
+        String::new()
+    } else {
+        format!(" [related: {}]", memory.related_entity_ids.join(", "))
+    };
+    format!(
+        "{} (importance: {}){}",
+        memory.text, memory.importance, related
+    )
 }
 
 fn render_gm_only_facts(context: &AgentContext, player_input: &str) -> String {

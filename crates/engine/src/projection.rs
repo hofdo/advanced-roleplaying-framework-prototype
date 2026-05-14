@@ -1,8 +1,8 @@
 use crate::ValidatedWorldStateDelta;
 use domain::{
-    EntityRef, FactVisibility, FrontendStatePatch, FrontendVisibleState, QuestStatus, Scenario,
-    ViewerContext, VisibleClock, VisibleFact, VisibleLocation, VisibleNpc, VisibleQuest,
-    WorldState,
+    EntityRef, FactVisibility, FrontendStatePatch, FrontendVisibleState, MemoryVisibility,
+    QuestStatus, Scenario, ViewerContext, VisibleClock, VisibleFact, VisibleLocation,
+    VisibleMemory, VisibleNpc, VisibleQuest, WorldState,
 };
 
 pub trait FrontendStateProjector: Send + Sync {
@@ -102,6 +102,19 @@ impl FrontendStateProjector for BasicFrontendStateProjector {
                 text: fact.text.clone(),
             })
             .collect();
+        let visible_memories = state
+            .memories
+            .iter()
+            .filter(|memory| {
+                viewer.is_admin || memory.visibility == MemoryVisibility::PlayerKnown
+            })
+            .map(|memory| VisibleMemory {
+                id: memory.id.clone(),
+                text: memory.text.clone(),
+                importance: memory.importance,
+                related_entity_ids: memory.related_entity_ids.clone(),
+            })
+            .collect();
 
         FrontendVisibleState {
             state_version: state.version,
@@ -111,6 +124,7 @@ impl FrontendStateProjector for BasicFrontendStateProjector {
             visible_quests,
             visible_clocks,
             player_known_facts,
+            visible_memories,
             recent_public_events: state.recent_events.clone(),
         }
     }
@@ -464,6 +478,58 @@ mod tests {
                 .player_known_facts
                 .iter()
                 .any(|f| f.id == "secret")
+        );
+    }
+
+    #[test]
+    fn projection_filters_memories_by_visibility() {
+        let scenario = fixtures::scenario().build();
+        let mut state = fixtures::world_state(&scenario).build();
+        state.memories = vec![
+            MemoryEntry {
+                id: "memory-public".into(),
+                text: "The examiner now trusts the player slightly.".into(),
+                visibility: MemoryVisibility::PlayerKnown,
+                importance: 6,
+                related_entity_ids: vec!["examiner".into()],
+                source_message_id: None,
+            },
+            MemoryEntry {
+                id: "memory-gm".into(),
+                text: "The guild suspects the mark is unstable.".into(),
+                visibility: MemoryVisibility::GmOnly,
+                importance: 9,
+                related_entity_ids: vec!["guild".into()],
+                source_message_id: None,
+            },
+        ];
+
+        let player_view =
+            BasicFrontendStateProjector.project(&scenario, &state, &ViewerContext::player());
+        let admin_view = BasicFrontendStateProjector.project(
+            &scenario,
+            &state,
+            &ViewerContext {
+                is_admin: true,
+                include_debug_state: true,
+            },
+        );
+
+        assert_eq!(
+            player_view
+                .visible_memories
+                .iter()
+                .map(|memory| memory.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["memory-public"]
+        );
+        assert_eq!(
+            admin_view
+                .visible_memories
+                .iter()
+                .map(|memory| memory.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["memory-public", "memory-gm"]
         );
     }
 

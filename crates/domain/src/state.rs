@@ -386,6 +386,8 @@ pub struct FrontendVisibleState {
     pub visible_quests: Vec<VisibleQuest>,
     pub visible_clocks: Vec<VisibleClock>,
     pub player_known_facts: Vec<VisibleFact>,
+    #[serde(default)]
+    pub visible_memories: Vec<VisibleMemory>,
     pub recent_public_events: Vec<String>,
 }
 
@@ -452,6 +454,14 @@ pub struct VisibleClock {
 pub struct VisibleFact {
     pub id: EntityKey,
     pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VisibleMemory {
+    pub id: EntityKey,
+    pub text: String,
+    pub importance: u8,
+    pub related_entity_ids: Vec<EntityKey>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -195,6 +195,8 @@ mod tests {
             active_clocks: vec![],
             player_known_facts: vec![],
             gm_only_facts: vec![],
+            player_memories: vec![],
+            gm_only_memories: vec![],
             recent_summary: None,
             recent_messages: vec![],
             rules: vec![],
@@ -279,6 +281,29 @@ mod tests {
         ctx
     }
 
+    fn context_with_memories() -> crate::AgentContext {
+        use domain::{MemoryEntry, MemoryVisibility};
+
+        let mut ctx = minimal_context(None);
+        ctx.player_memories.push(MemoryEntry {
+            id: "memory-public".into(),
+            text: "Marta noticed the player treat the staff well.".into(),
+            visibility: MemoryVisibility::PlayerKnown,
+            importance: 6,
+            related_entity_ids: vec!["steward-marta".into()],
+            source_message_id: None,
+        });
+        ctx.gm_only_memories.push(MemoryEntry {
+            id: "memory-gm".into(),
+            text: "The guild quietly flagged the player as a risk.".into(),
+            visibility: MemoryVisibility::GmOnly,
+            importance: 9,
+            related_entity_ids: vec!["guild".into()],
+            source_message_id: None,
+        });
+        ctx
+    }
+
     #[test]
     fn non_streaming_visible_prompt_excludes_gm_only_facts() {
         let context = context_with_secret("The chancellor poisoned the treaty.");
@@ -313,6 +338,39 @@ mod tests {
 
         assert!(combined.contains("The chancellor poisoned the treaty."));
         assert!(request.json_mode);
+    }
+
+    #[test]
+    fn visible_response_prompt_includes_player_memory_only() {
+        let request = BasicPromptBuilder
+            .build_visible_response_prompt(&context_with_memories(), "I ask Marta what she thinks.");
+        let combined = request
+            .messages
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(combined.contains("Marta noticed the player treat the staff well."));
+        assert!(!combined.contains("The guild quietly flagged the player as a risk."));
+    }
+
+    #[test]
+    fn delta_extraction_prompt_includes_gm_only_memory() {
+        let request = BasicPromptBuilder.build_delta_extraction_prompt(
+            &context_with_memories(),
+            "I ask Marta what she thinks.",
+            "Marta studies you more carefully before answering.",
+        );
+        let combined = request
+            .messages
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(combined.contains("Marta noticed the player treat the staff well."));
+        assert!(combined.contains("The guild quietly flagged the player as a risk."));
     }
 
     fn rich_context(mode: Option<TurnMode>) -> crate::AgentContext {
@@ -439,6 +497,22 @@ mod tests {
                     reveal_condition_satisfied: None,
                 },
             ],
+            player_memories: vec![domain::MemoryEntry {
+                id: "memory-known-1".into(),
+                text: "The guild watched the player stabilize the mana surge.".into(),
+                visibility: domain::MemoryVisibility::PlayerKnown,
+                importance: 6,
+                related_entity_ids: vec!["guild".into()],
+                source_message_id: None,
+            }],
+            gm_only_memories: vec![domain::MemoryEntry {
+                id: "memory-gm-1".into(),
+                text: "Seraphyne fears the anomaly is linked to the hidden ruin.".into(),
+                visibility: domain::MemoryVisibility::GmOnly,
+                importance: 9,
+                related_entity_ids: vec!["hidden-ruin".into()],
+                source_message_id: None,
+            }],
             recent_summary: Some("The guild suspects the player is tied to the anomaly.".into()),
             recent_messages: vec![
                 MessageContext {

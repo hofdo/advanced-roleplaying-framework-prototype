@@ -28,6 +28,10 @@ RELEVANT FACTS:
 Player-known facts: Witnesses saw abnormal mana in the guildhall
 GM-only facts (do not reveal unless justified): The guildhall panic will expose the hidden ruin (reveal conditions: if the panic clock reaches 4) | A duke across the sea hides a sapphire ledger (reveal conditions: only during the harbor arc)
 
+CAMPAIGN MEMORY:
+Player-visible memory: The guild watched the player stabilize the mana surge. (importance: 6) [related: guild]
+GM-only memory: Seraphyne fears the anomaly is linked to the hidden ruin. (importance: 9) [related: hidden-ruin]
+
 RECENT SUMMARY:
 The guild suspects the player is tied to the anomaly.
 
