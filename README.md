@@ -319,7 +319,7 @@ Streaming turns render tokens as they arrive and print a final block with `world
 | `PATCH` | `/sessions/:id/provider` | Assign a registered provider to the session |
 | `GET` | `/sessions/:id/world-state` | Get frontend-safe projected state |
 | `GET` | `/sessions/:id/export` | Export frontend-visible session state |
-| `GET` | `/sessions/:id/events` | Stream session events |
+| `GET` | `/sessions/:id/events` | List session events |
 
 ### Turns
 
