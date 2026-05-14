@@ -770,6 +770,7 @@ pub fn initial_world_state(session_id: SessionId, scenario: &Scenario) -> WorldS
             .collect(),
         relationships: Vec::<RelationshipState>::new(),
         inventory: Vec::<InventoryItem>::new(),
+        memories: vec![],
         summary: None,
         recent_events: vec![],
     }

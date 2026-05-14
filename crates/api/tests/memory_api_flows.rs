@@ -934,6 +934,75 @@ async fn in_memory_turn_cycle_applies_delta_and_returns_response() {
 }
 
 #[tokio::test]
+async fn campaign_memory_turn_persists_and_projects_visible_memory() {
+    let raw = r#"{
+        "player_response": "The examiner's tone softens as she studies your restraint.",
+        "world_state_delta": {
+            "facts_to_add": [],
+            "npc_changes": [],
+            "faction_changes": [],
+            "quest_changes": [],
+            "clock_changes": [],
+            "relationship_changes": [],
+            "location_change": null,
+            "summary_update": {
+                "summary": "The examiner now regards the player as unexpectedly courteous.",
+                "reason": "Carry forward the shift in tone."
+            },
+            "memory_changes": [
+                {
+                    "type": "added",
+                    "text": "The examiner judges the player by how they treat staff under pressure.",
+                    "visibility": "player_known",
+                    "importance": 7,
+                    "related_entity_ids": ["examiner"],
+                    "reason": "The player spoke respectfully to staff."
+                }
+            ],
+            "event_log_entries": ["The examiner quietly revises her impression of the player."]
+        }
+    }"#;
+    let router = memory_test_context(mock_provider(turn_responses([raw.to_string()])));
+    let scenario = sample_scenario();
+
+    send_json(
+        &router,
+        "POST",
+        "/scenarios",
+        serde_json::to_value(&scenario).unwrap(),
+    )
+    .await;
+    let (_, session_body) = send_json(
+        &router,
+        "POST",
+        "/sessions",
+        json!({ "scenario_id": scenario.id, "title": "Campaign Memory" }),
+    )
+    .await;
+    let session: Value = json_body(&session_body);
+    let session_id = session["id"].as_str().unwrap();
+
+    let (status, body) = send_json(
+        &router,
+        "POST",
+        &format!("/sessions/{session_id}/turn"),
+        json!({ "input": "I thank the staff and keep my voice calm.", "mode": "dialogue" }),
+    )
+    .await;
+    let turn_json: Value = json_body(&body);
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(turn_json["world_state_version"], 1);
+    assert_eq!(
+        turn_json["frontend_state_patch"]["visible_state"]["visible_memories"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
 async fn non_streaming_turn_visible_prompt_does_not_receive_gm_only_fact() {
     let visible = "The examiner watches you without lowering her hand from the alarm bell.";
     let empty_delta = r#"{

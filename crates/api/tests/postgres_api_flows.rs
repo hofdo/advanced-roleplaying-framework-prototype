@@ -766,6 +766,98 @@ async fn debug_turn_returns_applied_delta() {
     ctx.cleanup().await;
 }
 
+#[tokio::test]
+#[ignore = "requires Docker-backed Postgres integration"]
+async fn campaign_memory_persists_in_raw_admin_export() {
+    let raw = r#"{
+        "player_response": "The examiner's tone softens as she studies your restraint.",
+        "world_state_delta": {
+            "facts_to_add": [],
+            "npc_changes": [],
+            "faction_changes": [],
+            "quest_changes": [],
+            "clock_changes": [],
+            "relationship_changes": [],
+            "location_change": null,
+            "summary_update": {
+                "summary": "The examiner now regards the player as unexpectedly courteous.",
+                "reason": "Carry forward the shift in tone."
+            },
+            "memory_changes": [
+                {
+                    "type": "added",
+                    "text": "The examiner judges the player by how they treat staff under pressure.",
+                    "visibility": "player_known",
+                    "importance": 7,
+                    "related_entity_ids": ["examiner"],
+                    "reason": "The player spoke respectfully to staff."
+                }
+            ],
+            "event_log_entries": ["The examiner quietly revises her impression of the player."]
+        }
+    }"#;
+    let mut config = shared::AppConfig::default();
+    config.storage.backend = shared::StorageBackend::Postgres;
+    config.admin.enabled = true;
+    config.admin.token = Some(ADMIN_TOKEN.into());
+    let ctx =
+        postgres_test_context_with_config(mock_provider(turn_responses([raw.to_string()])), config)
+            .await
+            .expect("test context");
+    let scenario = sample_scenario();
+
+    send_json(
+        &ctx.router,
+        "POST",
+        "/scenarios",
+        serde_json::to_value(&scenario).unwrap(),
+    )
+    .await;
+    let (_, session_body) = send_json(
+        &ctx.router,
+        "POST",
+        "/sessions",
+        json!({ "scenario_id": scenario.id, "title": "Campaign Memory" }),
+    )
+    .await;
+    let session: persistence::SessionRecord = json_body(&session_body);
+
+    let (turn_status, turn_body) = send_json(
+        &ctx.router,
+        "POST",
+        &format!("/sessions/{}/turn", session.id),
+        json!({ "input": "I thank the staff and keep my voice calm.", "mode": "dialogue" }),
+    )
+    .await;
+    assert_eq!(
+        turn_status,
+        http::StatusCode::OK,
+        "turn failed with body: {}",
+        String::from_utf8_lossy(&turn_body)
+    );
+
+    let (status, body) = send_empty_with_bearer(
+        &ctx.router,
+        "GET",
+        &format!("/admin/sessions/{}/export/raw", session.id),
+        ADMIN_TOKEN,
+    )
+    .await;
+    let payload: Value = json_body(&body);
+
+    assert_eq!(status, http::StatusCode::OK);
+    assert_eq!(
+        payload["world_state"]["memories"].as_array().unwrap().len(),
+        1
+    );
+    assert_eq!(
+        payload["world_state"]["memories"][0]["text"],
+        "The examiner judges the player by how they treat staff under pressure."
+    );
+
+    ctx.cleanup().await;
+}
+
 // ---------------------------------------------------------------------------
 // Phase 1.3 — export projection and raw_provider_output leak tests
 // ---------------------------------------------------------------------------
@@ -832,6 +924,7 @@ fn export_projection_strips_gm_only_facts() {
         clocks: vec![],
         relationships: vec![],
         inventory: vec![],
+        memories: vec![],
         summary: None,
         recent_events: vec![],
     };
