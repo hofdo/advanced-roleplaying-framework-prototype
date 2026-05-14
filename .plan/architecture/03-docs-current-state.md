@@ -4,6 +4,8 @@
 
 **Goal:** Update README documentation so it accurately describes implemented Postgres turn locking, current secrecy boundaries, routes, and test coverage.
 
+**Execution order:** Run this plan **after** `.plan/architecture/01-non-streaming-secrecy-boundary.md` lands. The Task 2 prose branches on whether the non-streaming split is in place; running 03 first leaves the README in a half-state that contradicts the code as soon as 01 ships.
+
 **Architecture:** Treat documentation as a checked contract for the repository. Verify claims against `api`, `persistence`, and engine code before changing prose, and add narrow doc checks that prevent the most important stale claims from returning.
 
 **Tech Stack:** Rust, Cargo workspace, Axum, SQLx/Postgres, Clap CLI, serde, tokio tests

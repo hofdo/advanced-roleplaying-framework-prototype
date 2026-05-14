@@ -38,10 +38,13 @@
   - Change `process_turn` and `process_turn_debug` to call provider twice: visible response, then delta extraction.
   - Keep `finalize_with_parsed_delta` as the shared finalizer.
   - Preserve raw provider output policy for the assistant message.
-- Modify: `crates/engine/tests/streaming_pipeline.rs`
-  - Add provider-request inspection helpers if the existing mock provider cannot expose prompt content.
+- Modify: `crates/providers/src/mock.rs`
+  - Add `RecordingMockProvider`, a thin wrapper around `MockProvider` that pushes every received `LlmRequest` onto an `Arc<Mutex<Vec<LlmRequest>>>` before delegating. Gate it with `#[cfg(any(test, feature = "test-fixtures"))]` so it is not included in normal builds.
+  - The existing `MockProvider` stores `responses` but never captures requests; tests in Tasks 2 and 3 below depend on request capture.
+- Modify: `crates/engine/tests/streaming_pipeline.rs` or add `crates/engine/tests/non_streaming_pipeline.rs`
+  - Use `RecordingMockProvider` to assert provider was called twice and that the first request excludes GM-only facts.
 - Modify: `crates/api/tests/memory_api_flows.rs`
-  - Add a non-streaming memory flow that proves the first provider request does not contain a GM-only fact.
+  - Use `RecordingMockProvider` (or a wrapper around it in `crates/api/tests/common/mod.rs`) to prove the first provider request does not contain a GM-only fact.
 - Modify: `crates/api/tests/postgres_api_flows.rs`
   - Mirror the memory flow under the ignored Postgres suite to protect durable execution.
 
@@ -135,7 +138,7 @@ git commit -m "test: lock prompt secrecy boundary"
 
 - [ ] **Step 1: Write failing pipeline test**
 
-Add a test with a recording provider that captures each `LlmRequest`. Seed it with two responses:
+Use `providers::mock::RecordingMockProvider` introduced in this task's File Structure section. It wraps `MockProvider` and stores every `LlmRequest` it receives on an `Arc<Mutex<Vec<LlmRequest>>>`. Define `joined_request_text(request: &LlmRequest) -> String` as a tiny helper in the same test file that concatenates `request.messages[i].content`. Seed the provider with two responses:
 
 ```json
 "The examiner watches you without lowering her hand from the alarm bell."
@@ -210,7 +213,7 @@ git commit -m "feat: split non-streaming turn generation"
 
 - [ ] **Step 1: Write failing API test**
 
-Add a test named `non_streaming_turn_visible_prompt_does_not_receive_gm_only_fact`. Use a recording provider seeded with visible narration and a valid empty delta JSON. Create a scenario using `sample_scenario()`, create a session, submit `/turn`, and inspect the first captured request.
+Add a test named `non_streaming_turn_visible_prompt_does_not_receive_gm_only_fact`. Use `RecordingMockProvider` (re-export from `providers::mock` or wrap in `crates/api/tests/common/mod.rs`) seeded with visible narration and a valid empty delta JSON. Create a scenario using `sample_scenario()`, create a session, submit `/turn`, and inspect the first captured request.
 
 Assert:
 

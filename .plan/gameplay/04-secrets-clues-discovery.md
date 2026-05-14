@@ -4,7 +4,9 @@
 
 **Goal:** Add clue and evidence tracking that can satisfy reveal conditions for secrets without directly leaking GM-only facts.
 
-**Architecture:** Preserve `FactVisibility` as the secrecy boundary and add clue/evidence state that links player discoveries to GM-only secrets. Validation should allow a secret to become player-known only when the delta cites a related secret ID and a satisfied clue or evidence condition.
+**Reveal-condition shape:** This plan replaces free-text reveal-condition matching with structured `ConditionRef` values. Each scenario `Secret` declares an ordered list of reveal conditions, and every clue references a `ConditionRef` by `id` plus a `MatchMode`. This is a hard requirement of this plan and must land before `.plan/gameplay/06-iron-archduke-scenario-mechanics.md` builds a behavioral fixture on top.
+
+**Architecture:** Preserve `FactVisibility` as the secrecy boundary and add clue/evidence state that links player discoveries to GM-only secrets. Validation allows a secret to become player-known only when the delta cites a related secret ID and a clue whose `ConditionRef` matches one of the secret's declared reveal conditions.
 
 **Tech Stack:** Rust, Cargo workspace, Axum, SQLx/Postgres, Clap CLI, serde, tokio tests
 
@@ -12,25 +14,28 @@
 
 ## Current State
 
-- Scenario `Secret` has `id`, `text`, and `reveal_conditions`.
+- Scenario `Secret` has `id`, `text`, and `reveal_conditions: Vec<String>`. This plan replaces that field with `reveal_conditions: Vec<RevealCondition>` where each entry has an `id` and a free-text `description` (the description is GM-only narrative; matching never compares against it).
 - Initial world state converts scenario secrets into GM-only facts.
-- `FactToAdd` can carry `related_secret_ids` and `reveal_condition_satisfied`.
+- `FactToAdd` can carry `related_secret_ids` and `reveal_condition_satisfied`. This plan changes `reveal_condition_satisfied` from a free-text string to a `ConditionRef`.
 - `BasicDeltaValidator` rejects player-known facts that duplicate GM-only facts unless a related secret ID and proof are present.
 - There is no structured clue/evidence inventory showing how reveal conditions were satisfied.
 
 ## Target Behavior
 
 - World state tracks clues/evidence discovered by the player.
-- Clues can link to one or more secret IDs and satisfy named reveal conditions.
-- Validator accepts player-known secret reveals only when linked clue/evidence satisfies the condition.
+- Clues can link to one or more secret IDs and reference one or more `ConditionRef` values pointing at structured `RevealCondition` entries on those secrets.
+- Validator accepts player-known secret reveals only when at least one linked clue's `ConditionRef` matches a `RevealCondition.id` declared on the targeted secret.
 - Projection shows discovered clues without GM-only secret text.
 - Prompt rendering helps the model use discovered clues without revealing undiscovered secrets.
 
 ## File Structure
 
+- Modify: `crates/domain/src/scenario.rs`
+  - Replace `Secret.reveal_conditions: Vec<String>` with `Vec<RevealCondition>` (`{ id: EntityKey, description: String }`).
 - Modify: `crates/domain/src/state.rs`
-  - Add `ClueState`, `ClueVisibility`, and `ClueChange`.
+  - Add `ClueState`, `ClueVisibility`, `ClueChange`, `ConditionRef`, and `MatchMode`.
   - Add `clues: Vec<ClueState>` and `clue_changes: Vec<ClueChange>`.
+  - Change `FactToAdd.reveal_condition_satisfied: Option<String>` to `Option<ConditionRef>`.
 - Modify: `crates/engine/src/validation.rs`
   - Check reveal proof against clue state.
 - Modify: `crates/engine/src/reducer.rs`
@@ -60,9 +65,24 @@ Add compatibility test for missing `clues` defaulting to empty and round-trip a 
   "clue_id": "silver-seal-residue",
   "text": "The treaty seal smells of bitter almond.",
   "linked_secret_ids": ["poisoned-treaty"],
-  "satisfied_reveal_conditions": ["inspect the treaty seal"],
+  "satisfied_reveal_conditions": [
+    { "id": "inspect-treaty-seal", "mode": "exact" }
+  ],
   "visible_to_player": true,
   "reason": "The player inspected the document."
+}
+```
+
+Also round-trip a `Secret` with the new `reveal_conditions` shape:
+
+```json
+{
+  "id": "poisoned-treaty",
+  "text": "The chancellor poisoned the treaty.",
+  "reveal_conditions": [
+    { "id": "inspect-treaty-seal", "description": "Player physically inspects the treaty seal." },
+    { "id": "interrogate-chancellor", "description": "Player extracts a confession from the chancellor." }
+  ]
 }
 ```
 
@@ -77,19 +97,39 @@ Expected: fails until clue types exist.
 Add:
 
 ```rust
+pub struct RevealCondition {
+    pub id: EntityKey,
+    pub description: String,
+}
+
+pub struct ConditionRef {
+    pub id: EntityKey,
+    pub mode: MatchMode,
+}
+
+pub enum MatchMode {
+    Exact,
+}
+
 pub struct ClueState {
     pub id: EntityKey,
     pub text: String,
     pub linked_secret_ids: Vec<EntityKey>,
-    pub satisfied_reveal_conditions: Vec<String>,
+    pub satisfied_reveal_conditions: Vec<ConditionRef>,
     pub visible_to_player: bool,
 }
 
 pub enum ClueChange {
-    Discovered { clue_id: EntityKey, text: String, linked_secret_ids: Vec<EntityKey>, satisfied_reveal_conditions: Vec<String>, visible_to_player: bool, reason: String },
+    Discovered { clue_id: EntityKey, text: String, linked_secret_ids: Vec<EntityKey>, satisfied_reveal_conditions: Vec<ConditionRef>, visible_to_player: bool, reason: String },
     VisibilityChanged { clue_id: EntityKey, visible_to_player: bool, reason: String },
 }
 ```
+
+`MatchMode::Exact` is the only mode in this plan: a `ConditionRef.id` matches a `RevealCondition.id` iff the strings are byte-equal. Future plans may add `Normalized` or `ContainsAll` modes; do not add them speculatively here.
+
+Change `Secret.reveal_conditions` in `crates/domain/src/scenario.rs` to `Vec<RevealCondition>` and migrate `samples/*.json` (including `bride-of-the-iron-archduke.json`) to the new shape in the same commit so domain serde tests stay green.
+
+Change `FactToAdd.reveal_condition_satisfied` to `Option<ConditionRef>`.
 
 Add default fields to state and delta.
 
@@ -130,15 +170,26 @@ Expected: tests fail until validation uses clues.
 
 - [ ] **Step 3: Validate clue changes**
 
-Require known secret IDs for `linked_secret_ids`, non-empty text, non-empty reason, and at least one satisfied reveal condition when linked to a secret.
+Require:
+
+- every entry in `linked_secret_ids` matches an existing scenario `Secret.id` (or appears in the current delta's secret additions, if the project ever supports adding secrets mid-session — out of scope for this plan);
+- every entry in `satisfied_reveal_conditions` is a `ConditionRef` whose `id` matches a `RevealCondition.id` declared on at least one of the linked secrets;
+- non-empty `text`;
+- non-empty `reason`;
+- at least one `ConditionRef` in `satisfied_reveal_conditions` when `linked_secret_ids` is non-empty.
+
+Unknown `ConditionRef.id` values must be rejected with a `ValidationError::UnknownRevealCondition { clue_id, condition_id }`.
 
 - [ ] **Step 4: Validate fact reveal proof through clues**
 
-When `FactToAdd.visibility == PlayerKnown` and `related_secret_ids` is non-empty, accept `reveal_condition_satisfied` only if:
+When `FactToAdd.visibility == PlayerKnown` and `related_secret_ids` is non-empty, accept `reveal_condition_satisfied: Some(condition_ref)` only if:
 
-1. Existing `world_state.clues` or current delta `clue_changes` links to that secret ID.
-2. A satisfied clue condition matches the proof string or the secret's reveal condition.
-3. The clue is visible to the player or becomes visible in the same delta.
+1. Existing `world_state.clues` or current delta `clue_changes` contains a clue whose `linked_secret_ids` covers every entry of `related_secret_ids`.
+2. That clue's `satisfied_reveal_conditions` contains a `ConditionRef` equal (by `id` under `MatchMode::Exact`) to `condition_ref`.
+3. The cited `condition_ref.id` matches a `RevealCondition.id` declared on every secret in `related_secret_ids`.
+4. The clue is visible to the player or becomes visible in the same delta.
+
+If `reveal_condition_satisfied` is `None`, the fact reveal is rejected. There is no free-text fallback.
 
 - [ ] **Step 5: Run tests**
 
@@ -176,9 +227,11 @@ Add:
 pub struct VisibleClue {
     pub id: EntityKey,
     pub text: String,
-    pub satisfied_reveal_conditions: Vec<String>,
+    pub satisfied_reveal_conditions: Vec<ConditionRef>,
 }
 ```
+
+`ConditionRef` is safe to project to the player: `id` is a stable scenario-author identifier, and `mode` is a tiny enum with no GM-only payload. The associated `RevealCondition.description` lives on the `Secret` (GM-only) and is never projected.
 
 Add `visible_clues` to `FrontendVisibleState`.
 
@@ -255,7 +308,8 @@ TEST_DATABASE_URL=postgres://roleplay:roleplay@127.0.0.1:5432/roleplay cargo tes
 
 ## Risks
 
-- Matching reveal conditions by free text can be brittle. Normalize strings or compare against secret IDs plus explicit clue condition lists.
+- `ConditionRef` removes the free-text brittleness but shifts the authoring burden: scenario authors must declare every reveal condition on each `Secret` up front. Document this in the scenario authoring docs touched by `.plan/features/01-scenario-authoring-cli.md`.
 - Clue text itself can leak a secret if authored carelessly; validation cannot fully solve bad authoring.
 - Multi-turn reveal proof must check existing clues as well as same-turn clue changes.
+- Migration of `samples/*.json` to the new `RevealCondition` shape must land in the same commit as the domain type change, or the sample-validation tests will break.
 

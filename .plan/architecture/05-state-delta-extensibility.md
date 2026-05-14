@@ -72,17 +72,55 @@ Run: `cargo test -p domain fixture_builders_create_valid_scenario_and_state`
 
 Expected: fails because `fixtures` does not exist.
 
-- [ ] **Step 3: Implement minimal builders**
+- [ ] **Step 3: Implement minimal builders with a pinned API**
 
-Create builders with these defaults:
+Create the following modules and types. This API is pinned for the entire roadmap; downstream consumers (engine, api, persistence tests) depend on these exact signatures.
 
 ```rust
+// crates/domain/src/fixtures.rs
+
 pub fn scenario() -> ScenarioBuilder;
 pub fn world_state(scenario: &Scenario) -> WorldStateBuilder;
 pub fn empty_delta() -> WorldStateDelta;
+
+pub struct ScenarioBuilder { /* private */ }
+
+impl ScenarioBuilder {
+    pub fn with_id(self, id: impl Into<EntityKey>) -> Self;
+    pub fn with_title(self, title: impl Into<String>) -> Self;
+    pub fn with_setting(self, setting: impl Into<String>) -> Self;
+    pub fn with_rule(self, rule: impl Into<String>) -> Self;
+    pub fn with_location(self, id: impl Into<EntityKey>, name: impl Into<String>) -> Self;
+    pub fn with_npc(self, id: impl Into<EntityKey>, name: impl Into<String>) -> Self;
+    pub fn with_faction(self, id: impl Into<EntityKey>, name: impl Into<String>) -> Self;
+    pub fn with_quest(self, id: impl Into<EntityKey>, title: impl Into<String>) -> Self;
+    pub fn with_clock(self, id: impl Into<EntityKey>, segments: u8) -> Self;
+    pub fn with_secret(self, id: impl Into<EntityKey>, text: impl Into<String>) -> Self;
+    pub fn build(self) -> Scenario;
+}
+
+pub struct WorldStateBuilder { /* private */ }
+
+impl WorldStateBuilder {
+    pub fn with_session_id(self, id: Uuid) -> Self;
+    pub fn with_version(self, version: u64) -> Self;
+    pub fn with_fact(self, fact: FactRecord) -> Self;
+    pub fn with_recent_event(self, text: impl Into<String>) -> Self;
+    pub fn with_npc_state(self, state: NpcState) -> Self;
+    pub fn with_faction_state(self, state: FactionState) -> Self;
+    pub fn with_quest_state(self, state: QuestState) -> Self;
+    pub fn with_clock_state(self, state: ClockState) -> Self;
+    pub fn build(self) -> WorldState;
+}
 ```
 
-The default scenario should include one visible location `guildhall`, one active NPC `examiner`, one faction `guild`, one quest `register`, one clock `fame`, and no secrets until `.with_secret` is called.
+Builder rules:
+
+- Each `with_*` method takes `self` and returns `Self` (consuming builder).
+- Duplicate IDs in `with_location` / `with_npc` / `with_faction` / `with_quest` / `with_clock` / `with_secret` overwrite the previous entry. This keeps tests terse when they need to vary one field of an entity introduced by an earlier helper layer.
+- `build()` is infallible and produces a value that satisfies `validate_scenario` / `validate_world_state` with default settings.
+
+The default scenario should include one visible location `guildhall`, one active NPC `examiner`, one faction `guild`, one quest `register`, one clock `fame` with 4 segments, and no secrets until `.with_secret` is called. The default world state derives all entity states from the scenario at version `1` with an empty fact list and a freshly generated session UUID.
 
 - [ ] **Step 4: Gate fixture exports**
 
@@ -175,7 +213,9 @@ Keep `common::sample_scenario()` as the stable API test helper, but implement it
 
 - [ ] **Step 3: Update persistence helpers**
 
-Replace standalone `sample_scenario()` and `sample_world_state()` bodies in `repository_tests.rs` with fixture builders plus local customization for persistence-specific IDs and messages.
+**Persistence-divergence policy:** persistence tests keep `sample_scenario()` and `sample_world_state()` as **local extensions** of `domain::fixtures` rather than direct replacements. The bodies must call `domain::fixtures::scenario()` / `domain::fixtures::world_state()` for the base, then layer persistence-specific concerns on top (deterministic session UUIDs that match seeded message timestamps, fixed `created_at` / `updated_at` values for repository assertions, message records that reference the seeded session). Do not push persistence-specific timestamps or UUID seeds into `domain::fixtures` — keep that crate domain-pure.
+
+Replace the entity-construction parts of `sample_scenario()` and `sample_world_state()` in `repository_tests.rs` with fixture builders, but keep the wrapper functions and their persistence-specific layering local to the persistence test module.
 
 - [ ] **Step 4: Run affected tests**
 

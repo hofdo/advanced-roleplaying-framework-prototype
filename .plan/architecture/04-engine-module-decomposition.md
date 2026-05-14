@@ -4,6 +4,10 @@
 
 **Goal:** Split large engine modules into focused submodules after safety behavior is locked, without changing runtime behavior.
 
+**Execution order:** Soft dependency on `.plan/architecture/01-non-streaming-secrecy-boundary.md`. No code symbol in this plan is gated on 01, but 01 adds new prompt-builder methods to `crates/engine/src/prompt.rs`; landing 01 first avoids re-splitting `prompt.rs` immediately after this decomposition pass.
+
+**Inline test migration policy:** When a module splits, inline `#[cfg(test)]` test modules move with the function they exercise. If a test exercises multiple functions that land in different files, keep it adjacent to the function it asserts hardest on and add a one-line module-level comment naming the other touched modules. Do not relocate tests to `crates/engine/tests/` as part of this plan — that conversion is a behavior change in test scope and belongs in its own pass.
+
 **Architecture:** Extract by responsibility, keep public re-exports stable in `crates/engine/src/lib.rs`, and run tests after every extraction. Do not mix behavior changes with movement; behavior changes belong in feature plans before this decomposition pass.
 
 **Tech Stack:** Rust, Cargo workspace, Axum, SQLx/Postgres, Clap CLI, serde, tokio tests
