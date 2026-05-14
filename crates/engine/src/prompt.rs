@@ -10,6 +10,15 @@ pub const PROMPT_TEMPLATE_VERSION: &str = "roleplaying-engine-v2";
 pub trait PromptBuilder: Send + Sync {
     fn build_non_streaming_prompt(&self, context: &AgentContext, player_input: &str) -> LlmRequest;
     fn build_streaming_prompt(&self, context: &AgentContext, player_input: &str) -> LlmRequest;
+    /// Build a narration-only prompt for non-streaming visible response generation.
+    ///
+    /// Uses `render_narration_context` so GM-only facts are excluded. Pairs with
+    /// `build_delta_extraction_prompt` for the oracle-context follow-up call.
+    fn build_visible_response_prompt(
+        &self,
+        context: &AgentContext,
+        player_input: &str,
+    ) -> LlmRequest;
     fn build_delta_extraction_prompt(
         &self,
         context: &AgentContext,
@@ -44,24 +53,25 @@ impl PromptBuilder for BasicPromptBuilder {
     }
 
     fn build_streaming_prompt(&self, context: &AgentContext, player_input: &str) -> LlmRequest {
-        LlmRequest {
-            messages: vec![
-                LlmMessage {
-                    role: LlmMessageRole::System,
-                    content: format!(
-                        "{}\nStream only player-visible narration. Do not emit JSON.",
-                        system_rules(context.mode)
-                    ),
-                },
-                LlmMessage {
-                    role: LlmMessageRole::User,
-                    content: render_narration_context(context, player_input),
-                },
-            ],
-            temperature: Some(0.8),
-            max_tokens: None,
-            json_mode: false,
-        }
+        narration_request(
+            context,
+            player_input,
+            "Stream only player-visible narration. Do not emit JSON.",
+            0.8,
+        )
+    }
+
+    fn build_visible_response_prompt(
+        &self,
+        context: &AgentContext,
+        player_input: &str,
+    ) -> LlmRequest {
+        narration_request(
+            context,
+            player_input,
+            "Return only the player-visible narration. Do not emit JSON or delta fields.",
+            0.7,
+        )
     }
 
     fn build_delta_extraction_prompt(
@@ -90,6 +100,29 @@ impl PromptBuilder for BasicPromptBuilder {
             max_tokens: None,
             json_mode: true,
         }
+    }
+}
+
+fn narration_request(
+    context: &AgentContext,
+    player_input: &str,
+    system_suffix: &str,
+    temperature: f32,
+) -> LlmRequest {
+    LlmRequest {
+        messages: vec![
+            LlmMessage {
+                role: LlmMessageRole::System,
+                content: format!("{}\n{}", system_rules(context.mode), system_suffix),
+            },
+            LlmMessage {
+                role: LlmMessageRole::User,
+                content: render_narration_context(context, player_input),
+            },
+        ],
+        temperature: Some(temperature),
+        max_tokens: None,
+        json_mode: false,
     }
 }
 
@@ -793,6 +826,58 @@ mod tests {
             .find(|m| m.role == providers::LlmMessageRole::User)
             .map(|m| m.content.as_str())
             .unwrap_or("")
+    }
+
+    fn context_with_secret(secret_text: &str) -> crate::AgentContext {
+        use domain::{Fact, FactSource, FactVisibility};
+        let mut ctx = minimal_context(None);
+        ctx.gm_only_facts.push(Fact {
+            id: "secret-1".into(),
+            text: secret_text.into(),
+            visibility: FactVisibility::GmOnly,
+            known_by: vec![],
+            source: FactSource::Scenario,
+            reveal_conditions: vec!["chancellor inspects treaty".into()],
+            related_secret_ids: vec![],
+            reveal_condition_satisfied: None,
+        });
+        ctx
+    }
+
+    #[test]
+    fn non_streaming_visible_prompt_excludes_gm_only_facts() {
+        let context = context_with_secret("The chancellor poisoned the treaty.");
+        let request =
+            BasicPromptBuilder.build_visible_response_prompt(&context, "I greet the chancellor.");
+        let combined = request
+            .messages
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(!combined.contains("The chancellor poisoned the treaty."));
+        assert!(combined.contains("Player-known facts"));
+        assert!(!request.json_mode);
+    }
+
+    #[test]
+    fn delta_extraction_prompt_includes_gm_only_facts_for_chancellor_secret() {
+        let context = context_with_secret("The chancellor poisoned the treaty.");
+        let request = BasicPromptBuilder.build_delta_extraction_prompt(
+            &context,
+            "I inspect the treaty.",
+            "The seal smells faintly bitter.",
+        );
+        let combined = request
+            .messages
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(combined.contains("The chancellor poisoned the treaty."));
+        assert!(request.json_mode);
     }
 
     fn rich_context(mode: Option<TurnMode>) -> crate::AgentContext {
