@@ -1,8 +1,8 @@
 use crate::ValidatedWorldStateDelta;
 use domain::{
     ActiveSpeakerChange, ClockChange, Fact, FactSource, FactionChange, InventoryChange, NpcChange,
-    QuestChange, QuestStatus, RelationshipChange, RelationshipState, SceneChange, SummaryUpdate,
-    WorldState,
+    MemoryChange, MemoryEntry, QuestChange, QuestStatus, RelationshipChange, RelationshipState,
+    SceneChange, SummaryUpdate, WorldState,
 };
 
 pub trait WorldStateReducer: Send + Sync {
@@ -26,6 +26,38 @@ impl WorldStateReducer for BasicWorldStateReducer {
 
         if let Some(SummaryUpdate { summary, .. }) = delta.summary_update {
             state.summary = summary;
+        }
+
+        for change in delta.memory_changes {
+            match change {
+                MemoryChange::Added {
+                    text,
+                    visibility,
+                    importance,
+                    related_entity_ids,
+                    ..
+                } => {
+                    let id = format!("memory-{}-{}", state.version + 1, state.memories.len() + 1);
+                    state.memories.push(MemoryEntry {
+                        id,
+                        text,
+                        visibility,
+                        importance,
+                        related_entity_ids,
+                        source_message_id: None,
+                    });
+                }
+                MemoryChange::ImportanceChanged {
+                    memory_id,
+                    importance,
+                    ..
+                } => {
+                    if let Some(memory) = state.memories.iter_mut().find(|memory| memory.id == memory_id)
+                    {
+                        memory.importance = importance;
+                    }
+                }
+            }
         }
 
         for fact in delta.facts_to_add {
@@ -353,6 +385,7 @@ mod tests {
             }],
             relationships: vec![],
             inventory: vec![],
+            memories: vec![],
             summary: None,
             recent_events: vec![],
         };
@@ -404,6 +437,7 @@ mod tests {
             clocks: vec![],
             relationships: vec![],
             inventory: vec![],
+            memories: vec![],
             summary: None,
             recent_events: vec![],
         };
@@ -715,6 +749,7 @@ mod tests {
             clocks: vec![],
             relationships: vec![],
             inventory: vec![],
+            memories: vec![],
             summary: None,
             recent_events: vec![],
         };
@@ -773,6 +808,7 @@ mod tests {
                 notes: vec![],
             }],
             inventory: vec![],
+            memories: vec![],
             summary: Some("Before the confrontation".into()),
             recent_events: vec![],
         };
@@ -864,5 +900,71 @@ mod tests {
             vec!["The examiner now reports directly to the guild masters."]
         );
         assert!(!next.clocks[0].visible_to_player);
+    }
+
+    #[test]
+    fn memory_added_creates_generated_id() {
+        let state = fixtures::world_state(&fixtures::scenario().build())
+            .with_version(2)
+            .build();
+        let delta = ValidatedWorldStateDelta(WorldStateDelta {
+            memory_changes: vec![MemoryChange::Added {
+                text: "Marta remembers how the player treated the staff.".into(),
+                visibility: MemoryVisibility::PlayerKnown,
+                importance: 7,
+                related_entity_ids: vec!["examiner".into()],
+                reason: "This should persist for future scenes.".into(),
+            }],
+            ..WorldStateDelta::default()
+        });
+
+        let next = BasicWorldStateReducer.apply(state, delta);
+
+        assert_eq!(next.memories.len(), 1);
+        assert_eq!(next.memories[0].id, "memory-3-1");
+        assert_eq!(
+            next.memories[0].text,
+            "Marta remembers how the player treated the staff."
+        );
+        assert_eq!(next.memories[0].importance, 7);
+    }
+
+    #[test]
+    fn importance_changed_updates_only_matching_memory() {
+        let mut state = fixtures::world_state(&fixtures::scenario().build())
+            .with_version(4)
+            .build();
+        state.memories = vec![
+            MemoryEntry {
+                id: "memory-4-1".into(),
+                text: "The player impressed Marta.".into(),
+                visibility: MemoryVisibility::PlayerKnown,
+                importance: 3,
+                related_entity_ids: vec!["examiner".into()],
+                source_message_id: None,
+            },
+            MemoryEntry {
+                id: "memory-4-2".into(),
+                text: "The guild suspects the player.".into(),
+                visibility: MemoryVisibility::GmOnly,
+                importance: 8,
+                related_entity_ids: vec!["guild".into()],
+                source_message_id: None,
+            },
+        ];
+
+        let delta = ValidatedWorldStateDelta(WorldStateDelta {
+            memory_changes: vec![MemoryChange::ImportanceChanged {
+                memory_id: "memory-4-1".into(),
+                importance: 9,
+                reason: "This memory became central.".into(),
+            }],
+            ..WorldStateDelta::default()
+        });
+
+        let next = BasicWorldStateReducer.apply(state, delta);
+
+        assert_eq!(next.memories[0].importance, 9);
+        assert_eq!(next.memories[1].importance, 8);
     }
 }

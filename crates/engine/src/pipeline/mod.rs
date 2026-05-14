@@ -642,6 +642,7 @@ mod tests {
             }],
             relationships: vec![],
             inventory: vec![],
+            memories: vec![],
             summary: None,
             recent_events: vec![],
         }

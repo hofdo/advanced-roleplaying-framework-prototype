@@ -1,7 +1,7 @@
 use domain::{
     ClockChange, EntityKey, Fact, FactVisibility, FactionChange, InventoryChange, LocationChange,
-    NpcChange, NpcStatus, QuestChange, RelationshipChange, Scenario, WorldState, WorldStateDelta,
-    validate_npc_status_transition,
+    MemoryChange, NpcChange, NpcStatus, QuestChange, RelationshipChange, Scenario, WorldState,
+    WorldStateDelta, validate_npc_status_transition,
 };
 use std::collections::HashSet;
 use thiserror::Error;
@@ -67,6 +67,31 @@ impl DeltaValidator for BasicDeltaValidator {
 
         if let Some(summary_update) = &delta.summary_update {
             require_reason(&summary_update.reason)?;
+        }
+
+        for change in &delta.memory_changes {
+            match change {
+                MemoryChange::Added {
+                    importance, reason, ..
+                } => {
+                    require_reason(reason)?;
+                    validate_memory_importance(*importance)?;
+                }
+                MemoryChange::ImportanceChanged {
+                    memory_id,
+                    importance,
+                    reason,
+                } => {
+                    require_reason(reason)?;
+                    validate_memory_importance(*importance)?;
+                    if !world_state.memories.iter().any(|memory| memory.id == *memory_id) {
+                        return Err(DeltaValidationError::UnknownEntity {
+                            entity: "memory",
+                            id: memory_id.clone(),
+                        });
+                    }
+                }
+            }
         }
 
         for fact in &delta.facts_to_add {
@@ -382,6 +407,16 @@ fn require_reason(reason: &str) -> Result<(), DeltaValidationError> {
     }
 }
 
+fn validate_memory_importance(importance: u8) -> Result<(), DeltaValidationError> {
+    if importance <= 10 {
+        Ok(())
+    } else {
+        Err(DeltaValidationError::MemoryImportanceOutOfRange {
+            importance: i16::from(importance),
+        })
+    }
+}
+
 fn find_leaked_gm_only_facts<'a>(world_state: &'a WorldState, text: &str) -> Vec<&'a Fact> {
     // PlayerCorrection source does not override GmOnly visibility — secrets are secrets.
     world_state
@@ -413,6 +448,8 @@ pub enum DeltaValidationError {
     StandingOutOfRange { faction_id: EntityKey, value: i32 },
     #[error("invalid NPC status transition: {0}")]
     InvalidStatus(String),
+    #[error("memory importance out of range: {importance}")]
+    MemoryImportanceOutOfRange { importance: i16 },
     #[error("PlayerKnown fact references secrets but provides no reveal_condition_satisfied proof")]
     MissingRevealProof,
     #[error("NPC {npc_id} (status: {status:?}) cannot perform {action}")]
@@ -909,5 +946,69 @@ mod tests {
         let result = BasicDeltaValidator.validate(&scenario(), &state(), &delta);
 
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn rejects_memory_without_reason() {
+        let delta = WorldStateDelta {
+            memory_changes: vec![MemoryChange::Added {
+                text: "Marta remembers the player's courtesy.".into(),
+                visibility: MemoryVisibility::PlayerKnown,
+                importance: 5,
+                related_entity_ids: vec!["examiner".into()],
+                reason: "".into(),
+            }],
+            ..WorldStateDelta::default()
+        };
+
+        let err = BasicDeltaValidator
+            .validate(&scenario(), &state(), &delta)
+            .expect_err("memory entries without reasons must be rejected");
+
+        assert!(matches!(err, DeltaValidationError::MissingReason));
+    }
+
+    #[test]
+    fn rejects_memory_importance_above_ten() {
+        let delta = WorldStateDelta {
+            memory_changes: vec![MemoryChange::Added {
+                text: "An over-prioritized memory.".into(),
+                visibility: MemoryVisibility::PlayerKnown,
+                importance: 11,
+                related_entity_ids: vec![],
+                reason: "This should be capped.".into(),
+            }],
+            ..WorldStateDelta::default()
+        };
+
+        let err = BasicDeltaValidator
+            .validate(&scenario(), &state(), &delta)
+            .expect_err("importance above ten must be rejected");
+
+        assert!(matches!(
+            err,
+            DeltaValidationError::MemoryImportanceOutOfRange { importance: 11 }
+        ));
+    }
+
+    #[test]
+    fn rejects_unknown_memory_id_for_importance_change() {
+        let delta = WorldStateDelta {
+            memory_changes: vec![MemoryChange::ImportanceChanged {
+                memory_id: "missing-memory".into(),
+                importance: 4,
+                reason: "Should reference an existing memory.".into(),
+            }],
+            ..WorldStateDelta::default()
+        };
+
+        let err = BasicDeltaValidator
+            .validate(&scenario(), &state(), &delta)
+            .expect_err("unknown memory id must be rejected");
+
+        assert!(matches!(
+            err,
+            DeltaValidationError::UnknownEntity { entity: "memory", .. }
+        ));
     }
 }

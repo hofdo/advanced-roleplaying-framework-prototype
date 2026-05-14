@@ -156,6 +156,7 @@ fn world_state(session_id: SessionId, scenario_id: ScenarioId) -> WorldState {
         }],
         relationships: vec![],
         inventory: vec![],
+        memories: vec![],
         summary: None,
         recent_events: vec![],
     }

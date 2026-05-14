@@ -106,6 +106,7 @@ mod tests {
             clocks: vec![],
             relationships: vec![],
             inventory: vec![],
+            memories: vec![],
             summary: None,
             recent_events: vec![],
         }
