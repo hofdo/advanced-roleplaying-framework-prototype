@@ -30,6 +30,10 @@ pub fn build_sample(name: &str) -> Result<Scenario> {
     Ok(scenario)
 }
 
+pub fn template_json() -> &'static str {
+    include_str!("../scenarios/templates/scenario.template.json")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

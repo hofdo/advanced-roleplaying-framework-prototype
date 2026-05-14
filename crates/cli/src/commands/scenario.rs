@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::{
     bootstrap::CliState,
     render::print_json,
-    samples::{build_sample, sample_names},
+    samples::{build_sample, sample_names, template_json},
     scenario_io::{read_scenario_file, scenario_summary},
 };
 
@@ -33,6 +33,10 @@ pub enum Cmd {
         #[arg(long)]
         file: String,
     },
+    /// List bundled sample scenario names.
+    Samples,
+    /// Print the bundled scenario authoring template.
+    Template,
     /// List all scenarios.
     List,
     /// Get a scenario by id.
@@ -46,6 +50,8 @@ pub async fn run(state: CliState, cmd: Cmd) -> Result<()> {
         Cmd::Create { file, sample } => create(state, file, sample).await,
         Cmd::Validate { file } => validate(&file),
         Cmd::Inspect { file } => inspect(&file),
+        Cmd::Samples => samples(),
+        Cmd::Template => template(),
         Cmd::List => {
             let scenarios = state.store.list_scenarios().await?;
             print_json(&scenarios)
@@ -95,5 +101,17 @@ fn validate(path: &str) -> Result<()> {
 fn inspect(path: &str) -> Result<()> {
     let scenario = read_scenario_file(path)?;
     println!("{}", scenario_summary(&scenario));
+    Ok(())
+}
+
+fn samples() -> Result<()> {
+    for name in sample_names() {
+        println!("{name}");
+    }
+    Ok(())
+}
+
+fn template() -> Result<()> {
+    print!("{template}", template = template_json());
     Ok(())
 }

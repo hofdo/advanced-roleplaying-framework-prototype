@@ -291,3 +291,21 @@ fn scenario_inspect_prints_author_facing_summary() {
     assert!(rendered.contains("Opening location:"));
     assert!(rendered.contains("Opening speaker:"));
 }
+
+#[test]
+fn scenario_samples_lists_builtin_names() {
+    let output = run_cli(&["scenario", "samples"]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(stdout(&output).contains("bride-of-the-iron-archduke"));
+}
+
+#[test]
+fn scenario_template_prints_valid_json() {
+    let output = run_cli(&["scenario", "template"]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let scenario: domain::Scenario =
+        serde_json::from_str(&stdout(&output)).expect("template json should parse");
+    domain::validate_scenario(&scenario).expect("template json should validate");
+}
