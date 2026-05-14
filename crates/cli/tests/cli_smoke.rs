@@ -1,9 +1,7 @@
-//! End-to-end smoke test: build a CliState in-process and drive a full
-//! scenario → session → turn → world cycle against the in-memory store and a
-//! MockProvider. Verifies the CLI's component wiring without spawning the
-//! binary.
+//! End-to-end smoke tests for both in-process wiring and subprocess command
+//! behavior.
 
-use std::sync::Arc;
+use std::{path::PathBuf, process::Output, sync::Arc};
 
 use domain::{TurnMode, ViewerContext};
 use engine::{
@@ -14,6 +12,7 @@ use engine::{
 use futures::StreamExt;
 use persistence::{ApplicationStore, InMemoryApplicationStore};
 use providers::{LlmProvider, MockProvider};
+use uuid::Uuid;
 
 const DELTA_JSON: &str = r#"{
     "facts_to_add": [],
@@ -27,6 +26,40 @@ const DELTA_JSON: &str = r#"{
     "location_change": null,
     "event_log_entries": ["The examiner notes the player."]
 }"#;
+
+struct TempScenarioFile {
+    path: PathBuf,
+}
+
+impl TempScenarioFile {
+    fn write(contents: &str) -> Self {
+        let path = std::env::temp_dir().join(format!("rp-cli-smoke-{}.json", Uuid::new_v4()));
+        std::fs::write(&path, contents).expect("temp scenario file should write");
+        Self { path }
+    }
+}
+
+impl Drop for TempScenarioFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+fn run_cli(args: &[&str]) -> Output {
+    let exe = std::env::var("CARGO_BIN_EXE_rp").expect("rp test binary path");
+    std::process::Command::new(exe)
+        .args(args)
+        .output()
+        .expect("cli process should run")
+}
+
+fn stdout(output: &Output) -> String {
+    String::from_utf8(output.stdout.clone()).expect("stdout should be utf-8")
+}
+
+fn stderr(output: &Output) -> String {
+    String::from_utf8(output.stderr.clone()).expect("stderr should be utf-8")
+}
 
 fn sample_scenario() -> domain::Scenario {
     domain::Scenario {
@@ -191,4 +224,53 @@ async fn streaming_turn_emits_tokens_metadata_and_final() {
     assert!(!tokens.is_empty());
     let final_ = final_event.expect("must receive Final event");
     assert_eq!(final_.world_state_version, 1);
+}
+
+#[test]
+fn scenario_validate_reports_valid_and_invalid_files() {
+    let valid = TempScenarioFile::write(include_str!("../scenarios/templates/scenario.template.json"));
+    let valid_path = valid.path.to_string_lossy().into_owned();
+    let valid_output = run_cli(&["scenario", "validate", "--file", &valid_path]);
+
+    assert!(valid_output.status.success(), "stderr: {}", stderr(&valid_output));
+    let valid_stdout = stdout(&valid_output);
+    assert!(valid_stdout.contains("valid scenario:"));
+    assert!(valid_stdout.contains("title:"));
+    assert!(valid_stdout.contains("locations:"));
+    assert!(valid_stdout.contains("npcs:"));
+
+    let invalid = TempScenarioFile::write(
+        r#"{
+            "id": "00000000-0000-0000-0000-000000000000",
+            "title": "Invalid File Scenario",
+            "scenario_type": "adventure",
+            "setting": "Test setting",
+            "tone": "test",
+            "rules": [],
+            "locations": [
+                {
+                    "id": "same",
+                    "name": "One",
+                    "description": "One",
+                    "visible": true
+                },
+                {
+                    "id": "same",
+                    "name": "Two",
+                    "description": "Two",
+                    "visible": true
+                }
+            ],
+            "factions": [],
+            "npcs": [],
+            "quests": [],
+            "secrets": [],
+            "clocks": []
+        }"#,
+    );
+    let invalid_path = invalid.path.to_string_lossy().into_owned();
+    let invalid_output = run_cli(&["scenario", "validate", "--file", &invalid_path]);
+
+    assert!(!invalid_output.status.success());
+    assert!(stderr(&invalid_output).contains("duplicate location id"));
 }

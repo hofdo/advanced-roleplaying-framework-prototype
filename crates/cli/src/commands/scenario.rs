@@ -21,6 +21,12 @@ pub enum Cmd {
         #[arg(long, conflicts_with = "file")]
         sample: Option<String>,
     },
+    /// Validate a scenario JSON file without persisting it.
+    Validate {
+        /// Path to a scenario JSON file.
+        #[arg(long)]
+        file: String,
+    },
     /// List all scenarios.
     List,
     /// Get a scenario by id.
@@ -32,6 +38,7 @@ pub enum Cmd {
 pub async fn run(state: CliState, cmd: Cmd) -> Result<()> {
     match cmd {
         Cmd::Create { file, sample } => create(state, file, sample).await,
+        Cmd::Validate { file } => validate(&file),
         Cmd::List => {
             let scenarios = state.store.list_scenarios().await?;
             print_json(&scenarios)
@@ -63,4 +70,17 @@ async fn create(state: CliState, file: Option<String>, sample: Option<String>) -
     };
     let created = state.store.create_scenario(scenario).await?;
     print_json(&created)
+}
+
+fn validate(path: &str) -> Result<()> {
+    let scenario = read_scenario_file(path)?;
+    println!("valid scenario:");
+    println!("title: {}", scenario.title);
+    println!("locations: {}", scenario.locations.len());
+    println!("npcs: {}", scenario.npcs.len());
+    println!("factions: {}", scenario.factions.len());
+    println!("quests: {}", scenario.quests.len());
+    println!("secrets: {}", scenario.secrets.len());
+    println!("clocks: {}", scenario.clocks.len());
+    Ok(())
 }
