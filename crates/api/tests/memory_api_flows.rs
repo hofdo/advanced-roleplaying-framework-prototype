@@ -4,7 +4,10 @@ mod common_memory;
 
 use api::{ApiStore, AppState, app_router};
 use async_trait::async_trait;
-use common::{json_body, mock_provider, sample_scenario, send_empty, send_empty_with_bearer, send_json};
+use common::{
+    joined_request_text, json_body, mock_provider, recording_mock_provider, sample_scenario,
+    send_empty, send_empty_with_bearer, send_json, turn_responses,
+};
 use common_memory::{memory_test_context, memory_test_context_with_config};
 use engine::InMemorySessionTurnLock;
 use http::StatusCode;
@@ -892,7 +895,7 @@ async fn in_memory_turn_cycle_applies_delta_and_returns_response() {
             "event_log_entries": ["The player revealed abnormal mana during guild registration."]
         }
     }"#;
-    let router = memory_test_context(mock_provider([raw.to_string()]));
+    let router = memory_test_context(mock_provider(turn_responses([raw.to_string()])));
     let scenario = sample_scenario();
 
     send_json(
@@ -927,6 +930,75 @@ async fn in_memory_turn_cycle_applies_delta_and_returns_response() {
     assert!(
         !player_response.is_empty(),
         "player_response must be a non-empty string"
+    );
+}
+
+#[tokio::test]
+async fn non_streaming_turn_visible_prompt_does_not_receive_gm_only_fact() {
+    let visible = "The examiner watches you without lowering her hand from the alarm bell.";
+    let empty_delta = r#"{
+        "facts_to_add": [],
+        "npc_changes": [],
+        "faction_changes": [],
+        "quest_changes": [],
+        "clock_changes": [],
+        "relationship_changes": [],
+        "location_change": null,
+        "event_log_entries": []
+    }"#;
+    let (provider, recorded_requests) =
+        recording_mock_provider([visible.to_owned(), empty_delta.to_owned()]);
+    let router = memory_test_context(provider);
+    let scenario = sample_scenario();
+
+    send_json(
+        &router,
+        "POST",
+        "/scenarios",
+        serde_json::to_value(&scenario).unwrap(),
+    )
+    .await;
+    let (_, session_body) = send_json(
+        &router,
+        "POST",
+        "/sessions",
+        json!({ "scenario_id": scenario.id, "title": "Secrecy Boundary" }),
+    )
+    .await;
+    let session: Value = json_body(&session_body);
+    let session_id = session["id"].as_str().unwrap();
+
+    let (status, body) = send_json(
+        &router,
+        "POST",
+        &format!("/sessions/{session_id}/turn"),
+        json!({
+            "input": "I ask the examiner what the soul-mark really means.",
+            "mode": "action",
+        }),
+    )
+    .await;
+    let payload: Value = json_body(&body);
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(payload.get("message_id").is_some());
+    assert_eq!(payload["world_state_version"], 1);
+    assert!(payload.get("frontend_state_patch").is_some());
+    assert!(payload.get("raw_provider_output").is_none());
+
+    let requests = recorded_requests.lock().expect("recorded requests");
+    assert_eq!(
+        requests.len(),
+        2,
+        "non-streaming turn must call provider twice"
+    );
+    assert!(
+        !joined_request_text(&requests[0]).contains("soul-mark was not created"),
+        "first (visible) request must not include GM-only fact text"
+    );
+    assert!(
+        joined_request_text(&requests[1]).contains("soul-mark was not created"),
+        "second (delta-extraction) request must include GM-only fact text"
     );
 }
 

@@ -31,7 +31,7 @@ validator.workspace = true
 [dev-dependencies]
 bytes.workspace = true
 http-body-util.workspace = true
-providers.workspace = true
+providers = { workspace = true, features = ["test-fixtures"] }
 testcontainers-modules = { version = "0.15", features = ["postgres"] }
 tower.workspace = true
 wiremock.workspace = true
