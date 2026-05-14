@@ -41,9 +41,9 @@ from a shared context that includes GM-only facts. This is a known architectural
 1. narration-safe visible response generation
 2. oracle-context delta extraction
 
-**Turn locking is in-memory only**
+**Turn locking depends on storage mode**
 
-Session turn locking is currently held in application memory. Multiple API instances will not coordinate locks across processes. PostgreSQL-backed distributed locking is not yet implemented. Run a single API instance when using PostgreSQL storage until this is resolved.
+Memory mode uses `InMemorySessionTurnLock`, which only coordinates turns inside one process. PostgreSQL mode uses `PostgresSessionTurnLock`, backed by `sessions.processing_turn` and `processing_turn_started_at`, so separate API instances sharing the same database coordinate turn processing. This is suitable for prototype multi-process protection, but it is still a coarse session-level lock rather than a queue.
 
 **Context selection is rule-based**
 
