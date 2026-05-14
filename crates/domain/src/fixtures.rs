@@ -155,6 +155,7 @@ pub fn world_state(scenario: &Scenario) -> WorldStateBuilder {
             clocks,
             relationships: vec![],
             inventory: vec![],
+            memories: vec![],
             summary: None,
             recent_events: vec![],
         },

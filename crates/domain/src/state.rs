@@ -16,6 +16,8 @@ pub struct WorldState {
     pub clocks: Vec<ClockState>,
     pub relationships: Vec<RelationshipState>,
     pub inventory: Vec<InventoryItem>,
+    #[serde(default)]
+    pub memories: Vec<MemoryEntry>,
     pub summary: Option<String>,
     pub recent_events: Vec<String>,
 }
@@ -122,6 +124,23 @@ pub struct InventoryItem {
     pub visible: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MemoryEntry {
+    pub id: EntityKey,
+    pub text: String,
+    pub visibility: MemoryVisibility,
+    pub importance: u8,
+    pub related_entity_ids: Vec<EntityKey>,
+    pub source_message_id: Option<MessageId>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryVisibility {
+    PlayerKnown,
+    GmOnly,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SceneReasoningStyle {
@@ -171,7 +190,26 @@ pub struct WorldStateDelta {
     #[serde(default)]
     pub summary_update: Option<SummaryUpdate>,
     #[serde(default)]
+    pub memory_changes: Vec<MemoryChange>,
+    #[serde(default)]
     pub event_log_entries: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum MemoryChange {
+    Added {
+        text: String,
+        visibility: MemoryVisibility,
+        importance: u8,
+        related_entity_ids: Vec<EntityKey>,
+        reason: String,
+    },
+    ImportanceChanged {
+        memory_id: EntityKey,
+        importance: u8,
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

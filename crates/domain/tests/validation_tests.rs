@@ -171,6 +171,7 @@ fn world_state_authoritative_facts_can_distinguish_secret_visibility() {
         clocks: vec![],
         relationships: vec![],
         inventory: vec![],
+        memories: vec![],
         summary: None,
         recent_events: vec![],
     };

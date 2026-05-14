@@ -1,7 +1,62 @@
 use domain::{
-    ClockChange, Fact, FactVisibility, FactionChange, InventoryChange, InventoryItem, NpcChange,
-    NpcState, NpcStatus, QuestChange, RelationshipChange, SceneReasoningStyle, TurnMode,
+    ClockChange, Fact, FactVisibility, FactionChange, InventoryChange, InventoryItem,
+    MemoryChange, MemoryVisibility, NpcChange, NpcState, NpcStatus, QuestChange,
+    RelationshipChange, SceneReasoningStyle, TurnMode, WorldState,
 };
+use serde_json::json;
+
+#[test]
+fn world_state_without_memories_defaults_to_empty() {
+    let state: WorldState = serde_json::from_value(json!({
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "scenario_id": "00000000-0000-0000-0000-000000000002",
+        "version": 0,
+        "current_location_id": null,
+        "current_scene": null,
+        "active_speaker_id": null,
+        "facts": [],
+        "npcs": [],
+        "factions": [],
+        "quests": [],
+        "clocks": [],
+        "relationships": [],
+        "inventory": [],
+        "summary": null,
+        "recent_events": []
+    }))
+    .unwrap();
+
+    assert!(state.memories.is_empty());
+}
+
+#[test]
+fn memory_change_added_roundtrips() {
+    let change: MemoryChange = serde_json::from_value(json!({
+        "type": "added",
+        "text": "Elowen learned Marta judges nobles by how they treat servants.",
+        "visibility": "player_known",
+        "importance": 7,
+        "related_entity_ids": ["steward-marta"],
+        "reason": "The player spoke respectfully to staff."
+    }))
+    .unwrap();
+
+    assert_eq!(
+        change,
+        MemoryChange::Added {
+            text: "Elowen learned Marta judges nobles by how they treat servants.".into(),
+            visibility: MemoryVisibility::PlayerKnown,
+            importance: 7,
+            related_entity_ids: vec!["steward-marta".into()],
+            reason: "The player spoke respectfully to staff.".into(),
+        }
+    );
+
+    let json = serde_json::to_string(&change).unwrap();
+    let round: MemoryChange = serde_json::from_str(&json).unwrap();
+    assert_eq!(change, round);
+    assert!(json.contains(r#""type":"added""#));
+}
 
 // ── NpcChange ────────────────────────────────────────────────────────────────
 
