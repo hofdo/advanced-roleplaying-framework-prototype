@@ -341,75 +341,45 @@ impl ContextBuilder for BasicContextBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use domain::*;
-    use uuid::Uuid;
+    use domain::fixtures;
+    use domain::{NpcStatus, Scenario, SceneReasoningStyle, WorldState};
 
     fn scenario() -> Scenario {
-        Scenario {
-            id: Uuid::new_v4(),
-            title: "Aurethia".into(),
-            scenario_type: ScenarioType::Adventure,
-            setting: "high fantasy".into(),
-            tone: "heroic".into(),
-            rules: vec![],
-            locations: vec![Location {
-                id: "hall".into(),
-                name: "Hall".into(),
-                description: "Marble hall.".into(),
-                visible: true,
-            }],
-            factions: vec![],
-            npcs: vec![Npc {
-                id: "seraphyne".into(),
-                name: "Seraphyne".into(),
-                description: "Goddess.".into(),
-                role_identity: RoleIdentity {
-                    core_emotion: "worried".into(),
-                    motivation: "guide carefully".into(),
-                    worldview: "power requires responsibility".into(),
-                    fear: None,
-                    desire: None,
-                    speech_style: "solemn".into(),
-                    boundaries: vec!["does not know the void source".into()],
-                    values: vec![],
-                },
-                stats: None,
-                initial_status: NpcStatus::Active,
-                initial_location_id: None,
-                initial_visible_to_player: true,
-            }],
-            quests: vec![],
-            secrets: vec![],
-            clocks: vec![],
-        }
+        let mut scenario = fixtures::scenario()
+            .with_location("hall", "Hall")
+            .with_npc("seraphyne", "Seraphyne")
+            .build();
+        scenario.locations.retain(|location| location.id == "hall");
+        scenario.npcs.retain(|npc| npc.id == "seraphyne");
+        let seraphyne = scenario
+            .npcs
+            .iter_mut()
+            .find(|npc| npc.id == "seraphyne")
+            .expect("seraphyne fixture");
+        seraphyne.role_identity.core_emotion = "worried".into();
+        seraphyne.role_identity.motivation = "guide carefully".into();
+        seraphyne.role_identity.worldview = "power requires responsibility".into();
+        seraphyne.role_identity.speech_style = "solemn".into();
+        seraphyne.role_identity.boundaries = vec!["does not know the void source".into()];
+        seraphyne.description = "Goddess.".into();
+        seraphyne.initial_location_id = Some("hall".into());
+        scenario.factions.clear();
+        scenario.quests.clear();
+        scenario.secrets.clear();
+        scenario.clocks.clear();
+        scenario
     }
 
     fn state(status: NpcStatus) -> WorldState {
-        WorldState {
-            session_id: Uuid::new_v4(),
-            scenario_id: Uuid::new_v4(),
-            version: 0,
-            current_location_id: Some("hall".into()),
-            current_scene: None,
-            active_speaker_id: Some("seraphyne".into()),
-            facts: vec![],
-            npcs: vec![NpcState {
-                npc_id: "seraphyne".into(),
-                status,
-                visible_to_player: true,
-                location_id: Some("hall".into()),
-                attitude_to_player: Some("cautious warmth".into()),
-                known_facts: vec![],
-                notes: vec![],
-            }],
-            factions: vec![],
-            quests: vec![],
-            clocks: vec![],
-            relationships: vec![],
-            inventory: vec![],
-            summary: None,
-            recent_events: vec![],
-        }
+        let scenario = scenario();
+        let mut world = fixtures::world_state(&scenario).build();
+        world.npcs[0].status = status;
+        world.npcs[0].attitude_to_player = Some("cautious warmth".into());
+        world.factions.clear();
+        world.quests.clear();
+        world.clocks.clear();
+        world.facts.clear();
+        world
     }
 
     #[test]

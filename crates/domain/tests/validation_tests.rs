@@ -120,7 +120,10 @@ fn scenario_validation_rejects_unknown_initial_npc_location() {
 
     let err = validate_scenario(&scenario).expect_err("unknown NPC location must be rejected");
 
-    assert!(err.to_string().contains("unknown location id missing-location"));
+    assert!(
+        err.to_string()
+            .contains("unknown location id missing-location")
+    );
 }
 
 #[test]

@@ -220,63 +220,28 @@ fn push_unique(refs: &mut Vec<EntityRef>, entity_type: &str, id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use domain::fixtures;
     use domain::*;
     use uuid::Uuid;
 
     #[test]
     fn projection_filters_gm_only_facts_for_normal_viewers() {
-        let scenario = Scenario {
-            id: Uuid::new_v4(),
-            title: "Aurethia".into(),
-            scenario_type: ScenarioType::Adventure,
-            setting: "fantasy".into(),
-            tone: "heroic".into(),
-            rules: vec![],
-            locations: vec![],
-            factions: vec![],
-            npcs: vec![],
-            quests: vec![],
-            secrets: vec![],
-            clocks: vec![],
-        };
-        let state = WorldState {
-            session_id: Uuid::new_v4(),
-            scenario_id: scenario.id,
-            version: 2,
-            current_location_id: None,
-            current_scene: None,
-            active_speaker_id: None,
-            facts: vec![
-                Fact {
-                    id: "known".into(),
-                    text: "The goddess is worried.".into(),
-                    visibility: FactVisibility::PlayerKnown,
-                    known_by: vec![],
-                    source: FactSource::Scenario,
-                    reveal_conditions: vec![],
-                    related_secret_ids: vec![],
-                    reveal_condition_satisfied: None,
-                },
-                Fact {
-                    id: "secret".into(),
-                    text: "The mark came from the void.".into(),
-                    visibility: FactVisibility::GmOnly,
-                    known_by: vec![],
-                    source: FactSource::Scenario,
-                    reveal_conditions: vec![],
-                    related_secret_ids: vec![],
-                    reveal_condition_satisfied: None,
-                },
-            ],
-            npcs: vec![],
-            factions: vec![],
-            quests: vec![],
-            clocks: vec![],
-            relationships: vec![],
-            inventory: vec![],
-            summary: None,
-            recent_events: vec![],
-        };
+        let scenario = fixtures::scenario()
+            .with_secret("secret", "The mark came from the void.")
+            .build();
+        let state = fixtures::world_state(&scenario)
+            .with_version(2)
+            .with_fact(Fact {
+                id: "known".into(),
+                text: "The goddess is worried.".into(),
+                visibility: FactVisibility::PlayerKnown,
+                known_by: vec![],
+                source: FactSource::Scenario,
+                reveal_conditions: vec![],
+                related_secret_ids: vec![],
+                reveal_condition_satisfied: None,
+            })
+            .build();
 
         let projected =
             BasicFrontendStateProjector.project(&scenario, &state, &ViewerContext::player());
@@ -462,58 +427,21 @@ mod tests {
 
     #[test]
     fn admin_projection_includes_gm_only_facts() {
-        let scenario = Scenario {
-            id: Uuid::new_v4(),
-            title: "Aurethia".into(),
-            scenario_type: ScenarioType::Adventure,
-            setting: "fantasy".into(),
-            tone: "heroic".into(),
-            rules: vec![],
-            locations: vec![],
-            factions: vec![],
-            npcs: vec![],
-            quests: vec![],
-            secrets: vec![],
-            clocks: vec![],
-        };
-        let state = WorldState {
-            session_id: Uuid::new_v4(),
-            scenario_id: scenario.id,
-            version: 1,
-            current_location_id: None,
-            current_scene: None,
-            active_speaker_id: None,
-            facts: vec![
-                Fact {
-                    id: "known".into(),
-                    text: "The goddess is worried.".into(),
-                    visibility: FactVisibility::PlayerKnown,
-                    known_by: vec![],
-                    source: FactSource::Scenario,
-                    reveal_conditions: vec![],
-                    related_secret_ids: vec![],
-                    reveal_condition_satisfied: None,
-                },
-                Fact {
-                    id: "secret".into(),
-                    text: "The mark came from the void.".into(),
-                    visibility: FactVisibility::GmOnly,
-                    known_by: vec![],
-                    source: FactSource::Scenario,
-                    reveal_conditions: vec![],
-                    related_secret_ids: vec![],
-                    reveal_condition_satisfied: None,
-                },
-            ],
-            npcs: vec![],
-            factions: vec![],
-            quests: vec![],
-            clocks: vec![],
-            relationships: vec![],
-            inventory: vec![],
-            summary: None,
-            recent_events: vec![],
-        };
+        let scenario = fixtures::scenario()
+            .with_secret("secret", "The mark came from the void.")
+            .build();
+        let state = fixtures::world_state(&scenario)
+            .with_fact(Fact {
+                id: "known".into(),
+                text: "The goddess is worried.".into(),
+                visibility: FactVisibility::PlayerKnown,
+                known_by: vec![],
+                source: FactSource::Scenario,
+                reveal_conditions: vec![],
+                related_secret_ids: vec![],
+                reveal_condition_satisfied: None,
+            })
+            .build();
 
         let player_view =
             BasicFrontendStateProjector.project(&scenario, &state, &ViewerContext::player());

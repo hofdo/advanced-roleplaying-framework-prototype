@@ -1,7 +1,5 @@
 use domain::{FrontendVisibleState, SessionId, ViewerContext};
-use engine::{
-    FrontendStateProjector, InMemorySessionTurnLock, SessionTurnLock, TurnPipelineError,
-};
+use engine::{FrontendStateProjector, InMemorySessionTurnLock, SessionTurnLock, TurnPipelineError};
 use persistence::{
     PgPersistence, PostgresSessionTurnLock, ProviderConfigRepository, ProviderRecord,
 };

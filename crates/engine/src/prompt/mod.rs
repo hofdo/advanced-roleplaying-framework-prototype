@@ -1,9 +1,14 @@
 use crate::AgentContext;
-use domain::{TurnMode, WorldStateDelta};
+use domain::TurnMode;
 use providers::{LlmMessage, LlmMessageRole, LlmRequest};
-use serde::Deserialize;
-use std::collections::HashSet;
-use thiserror::Error;
+
+pub mod parser;
+mod render;
+pub mod repair;
+
+pub use parser::{JsonResponseParser, ParseError, PlayerTurnModelOutput, ResponseParser};
+use render::{render_context, render_narration_context};
+pub use repair::repair_prompt;
 
 pub const PROMPT_TEMPLATE_VERSION: &str = "roleplaying-engine-v2";
 
@@ -157,579 +162,9 @@ fn system_rules(mode: Option<TurnMode>) -> String {
     }
 }
 
-fn render_context(context: &AgentContext, player_input: &str) -> String {
-    [
-        render_section(
-            "SCENARIO AND SETTING",
-            &[
-                format!("Scenario: {}", context.scenario_title),
-                format!("Setting: {}", context.setting_summary),
-                format!("Rules: {}", join_or_none(&context.rules)),
-            ],
-        ),
-        render_section(
-            "SCENE STYLE DIRECTIVE",
-            &[
-                format!("Style: {:?}", context.scene_directive.style),
-                format!(
-                    "Priorities: {}",
-                    join_or_none(&context.scene_directive.priorities)
-                ),
-                format!("Avoid: {}", join_or_none(&context.scene_directive.avoid)),
-                format!(
-                    "Visible response shape: {}",
-                    context.scene_directive.visible_response_shape
-                ),
-            ],
-        ),
-        render_section(
-            "ACTIVE ROLE ACTIVATION",
-            &[
-                format!(
-                    "Active role: {}",
-                    context
-                        .active_role
-                        .active_role_name
-                        .as_deref()
-                        .unwrap_or("Narrator/GM")
-                ),
-                format!(
-                    "Emotion now: {}",
-                    context.active_role.emotion_now.as_deref().unwrap_or("none")
-                ),
-                format!(
-                    "Motivation now: {}",
-                    context
-                        .active_role
-                        .motivation_now
-                        .as_deref()
-                        .unwrap_or("none")
-                ),
-                format!(
-                    "Knowledge boundaries: {}",
-                    join_or_none(&context.active_role.knowledge_boundaries)
-                ),
-                format!(
-                    "Forbidden moves: {}",
-                    join_or_none(&context.active_role.forbidden_moves)
-                ),
-                format!(
-                    "Speech constraints: {}",
-                    join_or_none(&context.active_role.speech_constraints)
-                ),
-            ],
-        ),
-        render_section(
-            "CURRENT WORLD STATE",
-            &[
-                format!(
-                    "Current location: {}",
-                    context
-                        .current_location
-                        .as_ref()
-                        .map(|location| format!("{} — {}", location.name, location.description))
-                        .unwrap_or_else(|| "none".into())
-                ),
-                format!(
-                    "Relevant NPCs: {}",
-                    if context.relevant_npcs.is_empty() {
-                        "none".into()
-                    } else {
-                        context
-                            .relevant_npcs
-                            .iter()
-                            .map(|npc| {
-                                format!(
-                                    "{} ({:?}; attitude: {})",
-                                    npc.npc.name,
-                                    npc.status,
-                                    npc.attitude_to_player.as_deref().unwrap_or("none")
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                            .join(" | ")
-                    }
-                ),
-                format!(
-                    "Relevant factions: {}",
-                    if context.relevant_factions.is_empty() {
-                        "none".into()
-                    } else {
-                        context
-                            .relevant_factions
-                            .iter()
-                            .map(|faction| {
-                                let standing = faction
-                                    .state
-                                    .as_ref()
-                                    .map(|state| state.standing.to_string())
-                                    .unwrap_or_else(|| "none".into());
-                                format!(
-                                    "{} (standing: {}; public goal: {})",
-                                    faction.faction.name,
-                                    standing,
-                                    faction.faction.faction_identity.public_goal
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                            .join(" | ")
-                    }
-                ),
-                format!(
-                    "Active quests: {}",
-                    if context.active_quests.is_empty() {
-                        "none".into()
-                    } else {
-                        context
-                            .active_quests
-                            .iter()
-                            .map(|quest| format!("{} ({:?})", quest.quest_id, quest.status))
-                            .collect::<Vec<_>>()
-                            .join(" | ")
-                    }
-                ),
-                format!(
-                    "Active clocks: {}",
-                    if context.active_clocks.is_empty() {
-                        "none".into()
-                    } else {
-                        context
-                            .active_clocks
-                            .iter()
-                            .map(|clock| {
-                                format!(
-                                    "{} ({}/{}; consequence: {})",
-                                    clock.title, clock.current, clock.max, clock.consequence
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                            .join(" | ")
-                    }
-                ),
-            ],
-        ),
-        render_facts_section(context, player_input, true),
-        render_single_value_section(
-            "RECENT SUMMARY",
-            context.recent_summary.as_deref().unwrap_or("none"),
-        ),
-        render_section(
-            "RECENT MESSAGES",
-            &[if context.recent_messages.is_empty() {
-                "none".into()
-            } else {
-                context
-                    .recent_messages
-                    .iter()
-                    .map(|message| format!("{}: {}", message.role, message.content))
-                    .collect::<Vec<_>>()
-                    .join(" | ")
-            }],
-        ),
-        render_single_value_section("PLAYER INPUT", player_input),
-    ]
-    .join("\n\n")
-}
-
-fn render_narration_context(context: &AgentContext, player_input: &str) -> String {
-    [
-        render_section(
-            "SCENARIO AND SETTING",
-            &[
-                format!("Scenario: {}", context.scenario_title),
-                format!("Setting: {}", context.setting_summary),
-                format!("Rules: {}", join_or_none(&context.rules)),
-            ],
-        ),
-        render_section(
-            "SCENE STYLE DIRECTIVE",
-            &[
-                format!("Style: {:?}", context.scene_directive.style),
-                format!(
-                    "Priorities: {}",
-                    join_or_none(&context.scene_directive.priorities)
-                ),
-                format!("Avoid: {}", join_or_none(&context.scene_directive.avoid)),
-                format!(
-                    "Visible response shape: {}",
-                    context.scene_directive.visible_response_shape
-                ),
-            ],
-        ),
-        render_section(
-            "ACTIVE ROLE ACTIVATION",
-            &[
-                format!(
-                    "Active role: {}",
-                    context
-                        .active_role
-                        .active_role_name
-                        .as_deref()
-                        .unwrap_or("Narrator/GM")
-                ),
-                format!(
-                    "Emotion now: {}",
-                    context.active_role.emotion_now.as_deref().unwrap_or("none")
-                ),
-                format!(
-                    "Motivation now: {}",
-                    context
-                        .active_role
-                        .motivation_now
-                        .as_deref()
-                        .unwrap_or("none")
-                ),
-                format!(
-                    "Knowledge boundaries: {}",
-                    join_or_none(&context.active_role.knowledge_boundaries)
-                ),
-                format!(
-                    "Forbidden moves: {}",
-                    join_or_none(&context.active_role.forbidden_moves)
-                ),
-                format!(
-                    "Speech constraints: {}",
-                    join_or_none(&context.active_role.speech_constraints)
-                ),
-            ],
-        ),
-        render_section(
-            "CURRENT WORLD STATE",
-            &[
-                format!(
-                    "Current location: {}",
-                    context
-                        .current_location
-                        .as_ref()
-                        .map(|location| format!("{} — {}", location.name, location.description))
-                        .unwrap_or_else(|| "none".into())
-                ),
-                format!(
-                    "Relevant NPCs: {}",
-                    if context.relevant_npcs.is_empty() {
-                        "none".into()
-                    } else {
-                        context
-                            .relevant_npcs
-                            .iter()
-                            .map(|npc| {
-                                format!(
-                                    "{} ({:?}; attitude: {})",
-                                    npc.npc.name,
-                                    npc.status,
-                                    npc.attitude_to_player.as_deref().unwrap_or("none")
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                            .join(" | ")
-                    }
-                ),
-                format!(
-                    "Relevant factions: {}",
-                    if context.relevant_factions.is_empty() {
-                        "none".into()
-                    } else {
-                        context
-                            .relevant_factions
-                            .iter()
-                            .map(|faction| {
-                                let standing = faction
-                                    .state
-                                    .as_ref()
-                                    .map(|state| state.standing.to_string())
-                                    .unwrap_or_else(|| "none".into());
-                                format!(
-                                    "{} (standing: {}; public goal: {})",
-                                    faction.faction.name,
-                                    standing,
-                                    faction.faction.faction_identity.public_goal
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                            .join(" | ")
-                    }
-                ),
-                format!(
-                    "Active quests: {}",
-                    if context.active_quests.is_empty() {
-                        "none".into()
-                    } else {
-                        context
-                            .active_quests
-                            .iter()
-                            .map(|quest| format!("{} ({:?})", quest.quest_id, quest.status))
-                            .collect::<Vec<_>>()
-                            .join(" | ")
-                    }
-                ),
-                format!(
-                    "Active clocks: {}",
-                    if context.active_clocks.is_empty() {
-                        "none".into()
-                    } else {
-                        context
-                            .active_clocks
-                            .iter()
-                            .map(|clock| {
-                                format!(
-                                    "{} ({}/{}; consequence: {})",
-                                    clock.title, clock.current, clock.max, clock.consequence
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                            .join(" | ")
-                    }
-                ),
-            ],
-        ),
-        render_facts_section(context, player_input, false),
-        render_single_value_section(
-            "RECENT SUMMARY",
-            context.recent_summary.as_deref().unwrap_or("none"),
-        ),
-        render_section(
-            "RECENT MESSAGES",
-            &[if context.recent_messages.is_empty() {
-                "none".into()
-            } else {
-                context
-                    .recent_messages
-                    .iter()
-                    .map(|message| format!("{}: {}", message.role, message.content))
-                    .collect::<Vec<_>>()
-                    .join(" | ")
-            }],
-        ),
-        render_single_value_section("PLAYER INPUT", player_input),
-    ]
-    .join("\n\n")
-}
-
-fn render_facts_section(
-    context: &AgentContext,
-    player_input: &str,
-    include_gm_only: bool,
-) -> String {
-    let player_known = format!(
-        "Player-known facts: {}",
-        if context.player_known_facts.is_empty() {
-            "none".into()
-        } else {
-            context
-                .player_known_facts
-                .iter()
-                .map(|fact| fact.text.as_str())
-                .collect::<Vec<_>>()
-                .join(" | ")
-        }
-    );
-    if include_gm_only {
-        render_section(
-            "RELEVANT FACTS",
-            &[
-                player_known,
-                format!(
-                    "GM-only facts (do not reveal unless justified): {}",
-                    render_gm_only_facts(context, player_input)
-                ),
-            ],
-        )
-    } else {
-        render_section("RELEVANT FACTS", &[player_known])
-    }
-}
-
-fn render_gm_only_facts(context: &AgentContext, player_input: &str) -> String {
-    let relevant = relevant_gm_only_facts(context, player_input);
-    if relevant.is_empty() {
-        "none".into()
-    } else {
-        relevant
-            .iter()
-            .map(|fact| {
-                let reveal_conditions = if fact.reveal_conditions.is_empty() {
-                    "none".into()
-                } else {
-                    fact.reveal_conditions.join("; ")
-                };
-                format!("{} (reveal conditions: {reveal_conditions})", fact.text)
-            })
-            .collect::<Vec<_>>()
-            .join(" | ")
-    }
-}
-
-fn relevant_gm_only_facts<'a>(
-    context: &'a AgentContext,
-    player_input: &str,
-) -> Vec<&'a domain::Fact> {
-    let location_name = context
-        .current_location
-        .as_ref()
-        .map(|location| location.name.as_str())
-        .unwrap_or("");
-    let active_role_name = context
-        .active_role
-        .active_role_name
-        .as_deref()
-        .unwrap_or("");
-    let quest_text = context
-        .active_quests
-        .iter()
-        .map(|quest| quest.quest_id.as_str())
-        .collect::<Vec<_>>()
-        .join(" ");
-    let clock_text = context
-        .active_clocks
-        .iter()
-        .map(|clock| clock.title.as_str())
-        .collect::<Vec<_>>()
-        .join(" ");
-    let cues = tokenize(&format!(
-        "{player_input} {location_name} {active_role_name} {quest_text} {clock_text}"
-    ));
-
-    context
-        .gm_only_facts
-        .iter()
-        .filter(|fact| {
-            let fact_text = format!("{} {}", fact.text, fact.reveal_conditions.join(" "));
-            let fact_tokens = tokenize(&fact_text);
-            !fact_tokens.is_disjoint(&cues)
-        })
-        .collect()
-}
-
-fn tokenize(input: &str) -> HashSet<String> {
-    input
-        .split(|ch: char| !ch.is_alphanumeric())
-        .map(|token| token.to_ascii_lowercase())
-        .filter(|token| token.len() >= 3 && !is_noise_token(token))
-        .collect()
-}
-
-fn is_noise_token(token: &str) -> bool {
-    matches!(
-        token,
-        "the"
-            | "and"
-            | "for"
-            | "with"
-            | "that"
-            | "this"
-            | "from"
-            | "into"
-            | "stop"
-            | "clock"
-            | "only"
-            | "during"
-    )
-}
-
-fn render_section(title: &str, lines: &[String]) -> String {
-    format!("{title}:\n{}", lines.join("\n"))
-}
-
-fn render_single_value_section(title: &str, value: &str) -> String {
-    format!("{title}:\n{value}")
-}
-
-fn join_or_none(values: &[String]) -> String {
-    if values.is_empty() {
-        "none".into()
-    } else {
-        values.join("; ")
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct PlayerTurnModelOutput {
-    pub player_response: String,
-    pub world_state_delta: WorldStateDelta,
-}
-
-pub trait ResponseParser: Send + Sync {
-    fn parse_turn_output(&self, raw: &str) -> Result<PlayerTurnModelOutput, ParseError>;
-    fn parse_delta_output(&self, raw: &str) -> Result<WorldStateDelta, ParseError>;
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct JsonResponseParser;
-
-impl ResponseParser for JsonResponseParser {
-    fn parse_turn_output(&self, raw: &str) -> Result<PlayerTurnModelOutput, ParseError> {
-        match serde_json::from_str(raw) {
-            Ok(output) => Ok(output),
-            Err(_) => serde_json::from_str(extract_json_object(raw)?)
-                .map_err(|error| ParseError::Malformed(error.to_string())),
-        }
-    }
-
-    fn parse_delta_output(&self, raw: &str) -> Result<WorldStateDelta, ParseError> {
-        match serde_json::from_str(raw) {
-            Ok(delta) => Ok(delta),
-            Err(_) => serde_json::from_str(extract_json_object(raw)?)
-                .map_err(|error| ParseError::Malformed(error.to_string())),
-        }
-    }
-}
-
-#[derive(Debug, Error)]
-pub enum ParseError {
-    #[error("malformed model output: {0}")]
-    Malformed(String),
-}
-
-fn extract_json_object(raw: &str) -> Result<&str, ParseError> {
-    let start = raw
-        .find('{')
-        .ok_or_else(|| ParseError::Malformed("missing JSON object start".into()))?;
-    let end = raw
-        .rfind('}')
-        .ok_or_else(|| ParseError::Malformed("missing JSON object end".into()))?;
-    Ok(&raw[start..=end])
-}
-
-/// Build a repair prompt that asks the LLM to return corrected JSON for the
-/// `WorldStateDelta` schema, given the malformed output it previously returned.
-///
-/// The repair call goes directly to `provider.generate()`; it must NOT go
-/// through the full turn pipeline.
-pub fn repair_prompt(raw_output: &str) -> String {
-    format!(
-        "The following output was malformed JSON. \
-         Return only valid JSON matching the WorldStateDelta schema. \
-         Do not include any explanation or markdown.\n\
-         \n\
-         Schema fields: facts_to_add, npc_changes, faction_changes, \
-         quest_changes, clock_changes, relationship_changes, \
-         location_change, event_log_entries\n\
-         \n\
-         Malformed output:\n{raw_output}"
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn parser_extracts_turn_json_from_wrapped_text() {
-        let raw = r#"prefix {"player_response":"Hi","world_state_delta":{"facts_to_add":[],"npc_changes":[],"faction_changes":[],"quest_changes":[],"clock_changes":[],"relationship_changes":[],"location_change":null,"event_log_entries":[]}} suffix"#;
-
-        let parsed = JsonResponseParser.parse_turn_output(raw).expect("parsed");
-
-        assert_eq!(parsed.player_response, "Hi");
-        assert!(parsed.world_state_delta.event_log_entries.is_empty());
-    }
-
-    #[test]
-    fn repair_prompt_contains_schema_fields_and_raw_output() {
-        let prompt = repair_prompt("{ bad json }");
-        assert!(prompt.contains("facts_to_add"));
-        assert!(prompt.contains("npc_changes"));
-        assert!(prompt.contains("{ bad json }"));
-    }
 
     // ---- TurnMode prompt shaping tests ----
 
@@ -1186,7 +621,7 @@ mod tests {
 
         assert_eq!(
             user_message_content(&request),
-            include_str!("prompt_fixtures/dialogue_user_prompt.txt").trim_end()
+            include_str!("../prompt_fixtures/dialogue_user_prompt.txt").trim_end()
         );
     }
 
@@ -1205,7 +640,7 @@ mod tests {
 
         assert_eq!(
             user_message_content(&request),
-            include_str!("prompt_fixtures/political_user_prompt.txt").trim_end()
+            include_str!("../prompt_fixtures/political_user_prompt.txt").trim_end()
         );
     }
 
@@ -1224,7 +659,7 @@ mod tests {
 
         assert_eq!(
             user_message_content(&request),
-            include_str!("prompt_fixtures/combat_user_prompt.txt").trim_end()
+            include_str!("../prompt_fixtures/combat_user_prompt.txt").trim_end()
         );
     }
 
@@ -1243,7 +678,7 @@ mod tests {
 
         assert_eq!(
             user_message_content(&request),
-            include_str!("prompt_fixtures/mystery_user_prompt.txt").trim_end()
+            include_str!("../prompt_fixtures/mystery_user_prompt.txt").trim_end()
         );
     }
 
@@ -1262,7 +697,7 @@ mod tests {
 
         assert_eq!(
             user_message_content(&request),
-            include_str!("prompt_fixtures/rules_user_prompt.txt").trim_end()
+            include_str!("../prompt_fixtures/rules_user_prompt.txt").trim_end()
         );
     }
 }

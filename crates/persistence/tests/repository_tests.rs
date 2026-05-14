@@ -1,4 +1,4 @@
-use domain::{MessageRecord, MessageRole, Scenario, ScenarioType, WorldState};
+use domain::{MessageRecord, MessageRole, Scenario, WorldState, fixtures};
 use engine::{SessionTurnLock, TurnLockError};
 use persistence::{
     EventRepository, MessageRepository, PgPersistence, PostgresSessionTurnLock,
@@ -49,40 +49,29 @@ async fn setup() -> (PgPersistence, Option<ContainerAsync<Postgres>>) {
 // ---------------------------------------------------------------------------
 
 fn sample_scenario() -> Scenario {
-    Scenario {
-        id: Uuid::new_v4(),
-        title: "Test Scenario".into(),
-        scenario_type: ScenarioType::Adventure,
-        setting: "test setting".into(),
-        tone: "neutral".into(),
-        rules: vec![],
-        locations: vec![],
-        factions: vec![],
-        npcs: vec![],
-        quests: vec![],
-        secrets: vec![],
-        clocks: vec![],
-    }
+    let mut scenario = fixtures::scenario()
+        .with_title("Test Scenario")
+        .with_setting("test setting")
+        .build();
+    scenario.tone = "neutral".into();
+    scenario
 }
 
 fn sample_world_state(session_id: Uuid, scenario_id: Uuid) -> WorldState {
-    WorldState {
-        session_id,
-        scenario_id,
-        version: 0,
-        current_location_id: None,
-        current_scene: None,
-        active_speaker_id: None,
-        facts: vec![],
-        npcs: vec![],
-        factions: vec![],
-        quests: vec![],
-        clocks: vec![],
-        relationships: vec![],
-        inventory: vec![],
-        summary: None,
-        recent_events: vec![],
-    }
+    let scenario = sample_scenario();
+    let mut state = fixtures::world_state(&scenario)
+        .with_session_id(session_id)
+        .with_version(0)
+        .build();
+    state.scenario_id = scenario_id;
+    state.current_location_id = None;
+    state.active_speaker_id = None;
+    state.facts.clear();
+    state.npcs.clear();
+    state.factions.clear();
+    state.quests.clear();
+    state.clocks.clear();
+    state
 }
 
 fn sample_message(session_id: Uuid) -> MessageRecord {

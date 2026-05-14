@@ -220,7 +220,8 @@ async fn non_streaming_turn_splits_visible_and_delta_calls() {
         "non-streaming turn must call provider twice (visible then delta)"
     );
     assert!(
-        !joined_request_text(&requests[0]).contains("The soul-mark was not created by the goddess."),
+        !joined_request_text(&requests[0])
+            .contains("The soul-mark was not created by the goddess."),
         "first (visible) request must not contain GM-only fact"
     );
     assert!(
@@ -274,7 +275,8 @@ async fn non_streaming_debug_turn_also_splits_calls() {
     let requests = recorded.lock().expect("requests mutex");
     assert_eq!(requests.len(), 2);
     assert!(
-        !joined_request_text(&requests[0]).contains("The soul-mark was not created by the goddess.")
+        !joined_request_text(&requests[0])
+            .contains("The soul-mark was not created by the goddess.")
     );
     assert!(
         joined_request_text(&requests[1]).contains("The soul-mark was not created by the goddess.")

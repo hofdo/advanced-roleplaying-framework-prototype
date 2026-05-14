@@ -123,11 +123,7 @@ impl InMemoryApplicationStore {
             .is_some()
     }
 
-    pub fn insert_session(
-        &self,
-        scenario_id: ScenarioId,
-        title: String,
-    ) -> Option<SessionRecord> {
+    pub fn insert_session(&self, scenario_id: ScenarioId, title: String) -> Option<SessionRecord> {
         let mut inner = self.inner.lock().expect("application store mutex");
         let scenario = inner.scenarios.get(&scenario_id)?.clone();
         let id = Uuid::new_v4();
@@ -889,7 +885,10 @@ mod tests {
         let scenario = scenario();
         let world = initial_world_state(Uuid::new_v4(), &scenario);
 
-        assert_eq!(world.current_location_id.as_deref(), Some("frostmere-citadel"));
+        assert_eq!(
+            world.current_location_id.as_deref(),
+            Some("frostmere-citadel")
+        );
         assert_eq!(world.active_speaker_id.as_deref(), Some("steward-marta"));
 
         let marta = world

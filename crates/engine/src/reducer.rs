@@ -320,6 +320,7 @@ impl WorldStateReducer for BasicWorldStateReducer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use domain::fixtures;
     use domain::*;
     use uuid::Uuid;
 
@@ -436,109 +437,60 @@ mod tests {
     }
 
     fn minimal_npc_state() -> WorldState {
-        WorldState {
-            session_id: Uuid::new_v4(),
-            scenario_id: Uuid::new_v4(),
-            version: 0,
-            current_location_id: None,
-            current_scene: None,
-            active_speaker_id: None,
-            facts: vec![],
-            npcs: vec![NpcState {
-                npc_id: "npc-1".into(),
-                status: NpcStatus::Active,
-                visible_to_player: true,
-                location_id: None,
-                attitude_to_player: None,
-                known_facts: vec![],
-                notes: vec![],
-            }],
-            factions: vec![],
-            quests: vec![],
-            clocks: vec![],
-            relationships: vec![],
-            inventory: vec![],
-            summary: None,
-            recent_events: vec![],
-        }
+        let scenario = fixtures::scenario().with_npc("npc-1", "NPC One").build();
+        let mut state = fixtures::world_state(&scenario).with_version(0).build();
+        state.npcs = vec![NpcState {
+            npc_id: "npc-1".into(),
+            status: NpcStatus::Active,
+            visible_to_player: true,
+            location_id: None,
+            attitude_to_player: None,
+            known_facts: vec![],
+            notes: vec![],
+        }];
+        state.factions.clear();
+        state.quests.clear();
+        state.clocks.clear();
+        state.facts.clear();
+        state
     }
 
     fn minimal_faction_state() -> WorldState {
-        WorldState {
-            session_id: Uuid::new_v4(),
-            scenario_id: Uuid::new_v4(),
-            version: 0,
-            current_location_id: None,
-            current_scene: None,
-            active_speaker_id: None,
-            facts: vec![],
-            npcs: vec![],
-            factions: vec![FactionState {
-                faction_id: "guild".into(),
-                standing: 0,
-                public_notes: vec![],
-                hidden_notes: vec![],
-                revealed_goals: vec![],
-            }],
-            quests: vec![],
-            clocks: vec![],
-            relationships: vec![],
-            inventory: vec![],
-            summary: None,
-            recent_events: vec![],
-        }
+        let scenario = fixtures::scenario().build();
+        let mut state = fixtures::world_state(&scenario).with_version(0).build();
+        state.npcs.clear();
+        state.quests.clear();
+        state.clocks.clear();
+        state.facts.clear();
+        state
     }
 
     fn minimal_quest_state() -> WorldState {
-        WorldState {
-            session_id: Uuid::new_v4(),
-            scenario_id: Uuid::new_v4(),
-            version: 0,
-            current_location_id: None,
-            current_scene: None,
-            active_speaker_id: None,
-            facts: vec![],
-            npcs: vec![],
-            factions: vec![],
-            quests: vec![QuestState {
-                quest_id: "register".into(),
-                status: QuestStatus::Available,
-                completed_objectives: vec![],
-                visible: true,
-            }],
-            clocks: vec![],
-            relationships: vec![],
-            inventory: vec![],
-            summary: None,
-            recent_events: vec![],
-        }
+        let scenario = fixtures::scenario().build();
+        let mut state = fixtures::world_state(&scenario).with_version(0).build();
+        state.npcs.clear();
+        state.factions.clear();
+        state.clocks.clear();
+        state.facts.clear();
+        state
     }
 
     fn minimal_clock_state() -> WorldState {
-        WorldState {
-            session_id: Uuid::new_v4(),
-            scenario_id: Uuid::new_v4(),
-            version: 0,
-            current_location_id: None,
-            current_scene: None,
-            active_speaker_id: None,
-            facts: vec![],
-            npcs: vec![],
-            factions: vec![],
-            quests: vec![],
-            clocks: vec![ClockState {
-                id: "fame".into(),
-                title: "Fame".into(),
-                current: 2,
-                max: 6,
-                consequence: "Notice.".into(),
-                visible_to_player: true,
-            }],
-            relationships: vec![],
-            inventory: vec![],
-            summary: None,
-            recent_events: vec![],
-        }
+        let scenario = fixtures::scenario().build();
+        let mut state = fixtures::world_state(&scenario).with_version(0).build();
+        state.npcs.clear();
+        state.factions.clear();
+        state.quests.clear();
+        state.facts.clear();
+        state.clocks = vec![ClockState {
+            id: "fame".into(),
+            title: "Fame".into(),
+            current: 2,
+            max: 6,
+            consequence: "Notice.".into(),
+            visible_to_player: true,
+        }];
+        state
     }
 
     #[test]
@@ -894,7 +846,10 @@ mod tests {
         );
         assert_eq!(next.inventory.len(), 1);
         assert_eq!(next.inventory[0].id, "ritual-knife");
-        assert_eq!(next.npcs[0].notes, vec!["Still suspects the player is unstable."]);
+        assert_eq!(
+            next.npcs[0].notes,
+            vec!["Still suspects the player is unstable."]
+        );
         assert!(!next.npcs[0].visible_to_player);
         assert_eq!(
             next.factions[0].public_notes,

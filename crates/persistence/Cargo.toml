@@ -18,4 +18,5 @@ tokio.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+domain = { workspace = true, features = ["test-fixtures"] }
 testcontainers-modules = { version = "0.15", features = ["postgres"] }

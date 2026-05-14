@@ -1,5 +1,5 @@
 use crate::{
-    AgentContext, BasicContextBuilder, BasicDeltaValidator, BasicFrontendStateProjector,
+    BasicContextBuilder, BasicDeltaValidator, BasicFrontendStateProjector,
     BasicHiddenReasoningStripper, BasicPromptBuilder, BasicReasoningStyleOptimizer,
     BasicRoleIdentityActivator, BasicWorldStateReducer, BuildContextInput, ContextBuilder,
     DeltaValidationError, DeltaValidator, FrontendStateProjector, HiddenReasoningStripper,
@@ -9,8 +9,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use domain::{
-    EntityRef, FrontendStatePatch, MessageRecord, MessageRole, Scenario, SceneReasoningStyle,
-    SessionId, TurnMode, ViewerContext, WorldState, WorldStateDelta,
+    MessageRecord, MessageRole, SceneReasoningStyle, SessionId, TurnMode, ViewerContext, WorldState,
 };
 use providers::{LlmMessage, LlmMessageRole, LlmProvider, LlmRequest, ProviderError};
 use std::sync::Arc;
@@ -18,36 +17,13 @@ use thiserror::Error;
 use tracing::instrument;
 use uuid::Uuid;
 
-#[derive(Debug, Clone)]
-pub struct TurnRequestInput {
-    pub session_id: SessionId,
-    pub input: String,
-    pub mode: Option<TurnMode>,
-    pub viewer: ViewerContext,
-}
+mod events;
+mod types;
 
-#[derive(Debug, Clone)]
-pub struct TurnResponse {
-    pub message_id: Uuid,
-    pub player_response: String,
-    pub scene_type: SceneReasoningStyle,
-    pub world_state_version: i64,
-    pub changed_entities: Vec<EntityRef>,
-    pub frontend_state_patch: FrontendStatePatch,
-}
-
-#[derive(Debug, Clone)]
-pub struct DebugTurnResponse {
-    pub turn: TurnResponse,
-    pub applied_delta: WorldStateDelta,
-}
-
-#[derive(Debug, Clone)]
-pub struct LoadedTurnState {
-    pub scenario: Scenario,
-    pub world_state: WorldState,
-    pub recent_messages: Vec<MessageRecord>,
-}
+pub use events::PipelineEventKind;
+pub use types::{
+    DebugTurnResponse, FinalizedTurn, LoadedTurnState, PreparedTurn, TurnRequestInput, TurnResponse,
+};
 
 #[async_trait]
 pub trait TurnStateStore: Send + Sync {
@@ -116,62 +92,6 @@ impl<P: ?Sized, S: ?Sized, L> DefaultTurnPipeline<P, S, L> {
             validator: BasicDeltaValidator,
             reducer: BasicWorldStateReducer,
             projector: BasicFrontendStateProjector,
-        }
-    }
-}
-
-/// Holds everything needed to start a streaming (or non-streaming) provider call.
-/// Produced by [`DefaultTurnPipeline::prepare_turn_context`].
-#[derive(Debug, Clone)]
-pub struct PreparedTurn {
-    /// Loaded DB state for this turn.
-    pub loaded: LoadedTurnState,
-    /// Built agent context passed to the prompt builder.
-    pub context: AgentContext,
-    /// Classified scene style.
-    pub scene_type: SceneReasoningStyle,
-}
-
-/// The post-provider results ready to be persisted.
-/// Produced by [`DefaultTurnPipeline::finalize_turn_delta`].
-#[derive(Debug, Clone)]
-pub struct FinalizedTurn {
-    pub user_message: MessageRecord,
-    pub assistant_message: MessageRecord,
-    pub validated_delta: ValidatedWorldStateDelta,
-    pub updated_world_state: WorldState,
-    pub world_state_version: i64,
-    pub frontend_state_patch: FrontendStatePatch,
-    pub visible_response: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PipelineEventKind {
-    TurnStarted,
-    TurnLockAcquired,
-    ContextBuilt,
-    ProviderCalled,
-    ProviderResponded,
-    DeltaApplied,
-    FrontendStateProjected,
-    TurnFinished,
-    TurnLockReleasing,
-    ProviderUsageCaptured,
-}
-
-impl PipelineEventKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::TurnStarted => "turn_started",
-            Self::TurnLockAcquired => "turn_lock_acquired",
-            Self::ContextBuilt => "context_built",
-            Self::ProviderCalled => "provider_called",
-            Self::ProviderResponded => "provider_responded",
-            Self::DeltaApplied => "delta_applied",
-            Self::FrontendStateProjected => "frontend_state_projected",
-            Self::TurnFinished => "turn_finished",
-            Self::TurnLockReleasing => "turn_lock_releasing",
-            Self::ProviderUsageCaptured => "provider_usage_captured",
         }
     }
 }
@@ -440,7 +360,8 @@ where
             )
             .await?;
         let mut finalized = finalized;
-        finalized.assistant_message.raw_provider_output = Some(two_call.visible_raw_provider_output);
+        finalized.assistant_message.raw_provider_output =
+            Some(two_call.visible_raw_provider_output);
         tracing::info!("delta_applied");
         self.record_pipeline_event(request.session_id, PipelineEventKind::DeltaApplied)
             .await?;
@@ -509,7 +430,8 @@ where
             )
             .await?;
         let mut finalized = finalized;
-        finalized.assistant_message.raw_provider_output = Some(two_call.visible_raw_provider_output);
+        finalized.assistant_message.raw_provider_output =
+            Some(two_call.visible_raw_provider_output);
         let applied_delta = finalized.validated_delta.0.clone();
         self.record_pipeline_event(request.session_id, PipelineEventKind::DeltaApplied)
             .await?;

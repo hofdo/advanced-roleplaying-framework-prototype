@@ -7,7 +7,9 @@ use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Result;
 use engine::{InMemorySessionTurnLock, SessionTurnLock};
-use persistence::{ApplicationStore, InMemoryApplicationStore, PgPersistence, PostgresSessionTurnLock};
+use persistence::{
+    ApplicationStore, InMemoryApplicationStore, PgPersistence, PostgresSessionTurnLock,
+};
 use providers::{LlmProvider, build_provider_from_config};
 use shared::{AppConfig, StorageBackend};
 

@@ -29,10 +29,7 @@ pub async fn run(state: CliState, args: Args) -> Result<()> {
     let Some(scenario) = state.store.get_scenario(session.scenario_id).await? else {
         anyhow::bail!("scenario {} not found", session.scenario_id);
     };
-    let projected = BasicFrontendStateProjector.project(
-        &scenario,
-        &world_state,
-        &ViewerContext::player(),
-    );
+    let projected =
+        BasicFrontendStateProjector.project(&scenario, &world_state, &ViewerContext::player());
     print_json(&projected)
 }

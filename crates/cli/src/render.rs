@@ -77,7 +77,11 @@ fn write_final_summary(
     writeln!(handle)?;
     writeln!(handle, "---")?;
     if let Some(final_) = final_event {
-        writeln!(handle, "world_state_version: {}", final_.world_state_version)?;
+        writeln!(
+            handle,
+            "world_state_version: {}",
+            final_.world_state_version
+        )?;
         writeln!(
             handle,
             "changed_entities: {}",
@@ -96,4 +100,3 @@ fn write_final_summary(
     }
     Ok(())
 }
-

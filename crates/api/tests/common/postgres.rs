@@ -24,9 +24,7 @@ impl TestContext {
     }
 }
 
-pub async fn postgres_test_context(
-    provider: Arc<dyn LlmProvider>,
-) -> anyhow::Result<TestContext> {
+pub async fn postgres_test_context(provider: Arc<dyn LlmProvider>) -> anyhow::Result<TestContext> {
     postgres_test_context_with_config(provider, {
         let mut config = shared::AppConfig::default();
         config.storage.backend = shared::StorageBackend::Postgres;

@@ -149,12 +149,10 @@ async fn non_streaming_turn_persists_messages_delta_state_and_events() {
     config.storage.backend = shared::StorageBackend::Postgres;
     config.admin.enabled = true;
     config.admin.token = Some(ADMIN_TOKEN.into());
-    let ctx = postgres_test_context_with_config(
-        mock_provider(turn_responses([raw.to_string()])),
-        config,
-    )
-    .await
-    .expect("test context");
+    let ctx =
+        postgres_test_context_with_config(mock_provider(turn_responses([raw.to_string()])), config)
+            .await
+            .expect("test context");
     let scenario = sample_scenario();
 
     send_json(
@@ -260,7 +258,7 @@ async fn second_turn_uses_updated_state() {
         turn_two.to_string(),
     ])))
     .await
-        .expect("test context");
+    .expect("test context");
     let scenario = sample_scenario();
 
     send_json(
@@ -718,12 +716,10 @@ async fn debug_turn_returns_applied_delta() {
     config.storage.backend = shared::StorageBackend::Postgres;
     config.admin.enabled = true;
     config.admin.token = Some(ADMIN_TOKEN.into());
-    let ctx = postgres_test_context_with_config(
-        mock_provider(turn_responses([raw.to_string()])),
-        config,
-    )
-    .await
-    .expect("test context");
+    let ctx =
+        postgres_test_context_with_config(mock_provider(turn_responses([raw.to_string()])), config)
+            .await
+            .expect("test context");
     let scenario = sample_scenario();
 
     send_json(
@@ -1030,9 +1026,12 @@ async fn raw_provider_output_is_persisted_when_storage_enabled() {
     let mut config = shared::AppConfig::default();
     config.storage.backend = shared::StorageBackend::Postgres;
     config.debug.store_raw_provider_output = true;
-    let ctx = postgres_test_context_with_config(mock_provider(turn_responses([raw_turn.to_string()])), config)
-        .await
-        .expect("test context");
+    let ctx = postgres_test_context_with_config(
+        mock_provider(turn_responses([raw_turn.to_string()])),
+        config,
+    )
+    .await
+    .expect("test context");
     let scenario = sample_scenario();
 
     send_json(
@@ -1102,9 +1101,7 @@ async fn postgres_non_streaming_visible_prompt_does_not_receive_gm_only_fact() {
     }"#;
     let (provider, recorded_requests) =
         recording_mock_provider([visible.to_owned(), empty_delta.to_owned()]);
-    let ctx = postgres_test_context(provider)
-        .await
-        .expect("test context");
+    let ctx = postgres_test_context(provider).await.expect("test context");
     let scenario = sample_scenario();
 
     send_json(

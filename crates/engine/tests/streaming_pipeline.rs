@@ -178,10 +178,7 @@ async fn stream_turn_yields_tokens_in_order_then_final() {
     let store = fixture(session_id);
     let provider = Arc::new(MockProvider::new(
         "mock",
-        [
-            "The guildhall falls silent.".into(),
-            DELTA_JSON.into(),
-        ],
+        ["The guildhall falls silent.".into(), DELTA_JSON.into()],
     ));
     let pipeline = Arc::new(DefaultTurnPipeline::new(provider, Arc::clone(&store)));
 
@@ -340,10 +337,7 @@ async fn stream_turn_propagates_provider_failure_on_delta_extraction() {
     let store = fixture(session_id);
     // Only one queued response: streaming narration. The second-pass
     // delta-extraction `generate()` call will hit NoMockResponse.
-    let provider = Arc::new(MockProvider::new(
-        "mock",
-        ["narration only".into()],
-    ));
+    let provider = Arc::new(MockProvider::new("mock", ["narration only".into()]));
     let pipeline = Arc::new(DefaultTurnPipeline::new(provider, Arc::clone(&store)));
 
     let stream = stream_turn(

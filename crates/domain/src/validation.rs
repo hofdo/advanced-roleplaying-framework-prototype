@@ -7,10 +7,7 @@ pub enum DomainValidationError {
     #[error("duplicate {entity} id: {id}")]
     DuplicateId { entity: &'static str, id: String },
     #[error("unknown location id {location_id} for npc {npc_id}")]
-    UnknownNpcInitialLocation {
-        npc_id: String,
-        location_id: String,
-    },
+    UnknownNpcInitialLocation { npc_id: String, location_id: String },
     #[error("clock {id} current exceeds max")]
     ClockCurrentExceedsMax { id: String },
     #[error("faction {id} standing must be between -100 and 100")]

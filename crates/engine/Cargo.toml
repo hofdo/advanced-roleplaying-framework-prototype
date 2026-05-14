@@ -19,5 +19,6 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+domain = { workspace = true, features = ["test-fixtures"] }
 tokio.workspace = true
 providers = { workspace = true, features = ["test-fixtures"] }

@@ -12,6 +12,7 @@ This crate is the vocabulary shared by the rest of the workspace.
 - `src/scenario.rs` defines scenario setup data such as roles, NPCs, factions, quests, secrets, locations, and clock templates.
 - `src/state.rs` defines runtime world state, visibility flags, typed `WorldStateDelta` mutations, frontend-visible state, changed-entity references, and message records.
 - `src/validation.rs` validates domain objects before they enter the engine or storage.
+- `DELTA_EXTENSION.md` tracks the cross-crate checklist for adding new `WorldStateDelta` variants safely.
 - `tests/` covers serialization round trips and validation behavior.
 
 ## Why It Exists

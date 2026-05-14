@@ -426,120 +426,24 @@ pub enum DeltaValidationError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use domain::fixtures;
     use domain::*;
-    use uuid::Uuid;
 
     fn scenario() -> Scenario {
-        Scenario {
-            id: Uuid::new_v4(),
-            title: "Aurethia".into(),
-            scenario_type: ScenarioType::Adventure,
-            setting: "high fantasy".into(),
-            tone: "heroic".into(),
-            rules: vec![],
-            locations: vec![Location {
-                id: "guildhall".into(),
-                name: "Guildhall".into(),
-                description: "A busy hall.".into(),
-                visible: true,
-            }],
-            factions: vec![Faction {
-                id: "guild".into(),
-                name: "Guild".into(),
-                description: "Adventurers.".into(),
-                faction_identity: FactionIdentity {
-                    public_goal: "assign quests".into(),
-                    hidden_goal: None,
-                    values: vec![],
-                    fears: vec![],
-                    methods: vec![],
-                },
-                initial_standing: 0,
-            }],
-            npcs: vec![Npc {
-                id: "examiner".into(),
-                name: "Examiner".into(),
-                description: "Guild examiner.".into(),
-                role_identity: RoleIdentity {
-                    core_emotion: "alert".into(),
-                    motivation: "test applicants".into(),
-                    worldview: "contracts matter".into(),
-                    fear: None,
-                    desire: None,
-                    speech_style: "formal".into(),
-                    boundaries: vec![],
-                    values: vec![],
-                },
-                stats: None,
-                initial_status: NpcStatus::Active,
-                initial_location_id: None,
-                initial_visible_to_player: true,
-            }],
-            quests: vec![Quest {
-                id: "register".into(),
-                title: "Register".into(),
-                description: "Join the guild.".into(),
-                objectives: vec![],
-                visible: true,
-            }],
-            secrets: vec![],
-            clocks: vec![],
-        }
+        let mut scenario = fixtures::scenario()
+            .with_title("Aurethia")
+            .with_setting("high fantasy")
+            .with_secret("void-mark", "The soul-mark was not created by the goddess.")
+            .build();
+        scenario.secrets[0].reveal_conditions = vec!["divine relic reacts".into()];
+        scenario
     }
 
     fn state() -> WorldState {
-        WorldState {
-            session_id: Uuid::new_v4(),
-            scenario_id: Uuid::new_v4(),
-            version: 0,
-            current_location_id: Some("guildhall".into()),
-            current_scene: None,
-            active_speaker_id: Some("examiner".into()),
-            facts: vec![Fact {
-                id: "void-mark".into(),
-                text: "The soul-mark was not created by the goddess.".into(),
-                visibility: FactVisibility::GmOnly,
-                known_by: vec![],
-                source: FactSource::Scenario,
-                reveal_conditions: vec!["divine relic reacts".into()],
-                related_secret_ids: vec![],
-                reveal_condition_satisfied: None,
-            }],
-            npcs: vec![NpcState {
-                npc_id: "examiner".into(),
-                status: NpcStatus::Active,
-                visible_to_player: true,
-                location_id: Some("guildhall".into()),
-                attitude_to_player: None,
-                known_facts: vec![],
-                notes: vec![],
-            }],
-            factions: vec![FactionState {
-                faction_id: "guild".into(),
-                standing: 0,
-                public_notes: vec![],
-                hidden_notes: vec![],
-                revealed_goals: vec![],
-            }],
-            quests: vec![QuestState {
-                quest_id: "register".into(),
-                status: QuestStatus::Active,
-                completed_objectives: vec![],
-                visible: true,
-            }],
-            clocks: vec![ClockState {
-                id: "fame".into(),
-                title: "Fame spreads".into(),
-                current: 1,
-                max: 6,
-                consequence: "Factions notice.".into(),
-                visible_to_player: true,
-            }],
-            relationships: vec![],
-            inventory: vec![],
-            summary: None,
-            recent_events: vec![],
-        }
+        let scenario = scenario();
+        let mut world = fixtures::world_state(&scenario).build();
+        world.quests[0].status = QuestStatus::Active;
+        world
     }
 
     #[test]

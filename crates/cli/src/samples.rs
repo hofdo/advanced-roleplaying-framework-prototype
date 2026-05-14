@@ -86,6 +86,9 @@ mod tests {
     fn bride_of_the_iron_archduke_opens_with_marta() {
         let scenario = build_sample("bride-of-the-iron-archduke").expect("sample should build");
 
-        assert_eq!(scenario.npcs.first().map(|npc| npc.id.as_str()), Some("steward-marta"));
+        assert_eq!(
+            scenario.npcs.first().map(|npc| npc.id.as_str()),
+            Some("steward-marta")
+        );
     }
 }

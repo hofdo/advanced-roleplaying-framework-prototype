@@ -125,7 +125,9 @@ async fn full_scenario_session_turn_world_cycle_in_memory() {
 
     let projected =
         BasicFrontendStateProjector.project(&scenario, &world_state, &ViewerContext::player());
-    let secrets_visible = serde_json::to_string(&projected).unwrap().contains("haunted");
+    let secrets_visible = serde_json::to_string(&projected)
+        .unwrap()
+        .contains("haunted");
     assert!(
         !secrets_visible,
         "player projection must not leak GM-only secrets"
