@@ -17,6 +17,7 @@ pub fn mock_provider(responses: impl IntoIterator<Item = String>) -> Arc<dyn Llm
 /// Build a recording mock provider seeded with `responses`.  Returns the
 /// erased provider for wiring into the app router plus a shared handle to the
 /// recorded request list for boundary assertions.
+#[allow(dead_code)]
 pub fn recording_mock_provider(
     responses: impl IntoIterator<Item = String>,
 ) -> (Arc<dyn LlmProvider>, Arc<Mutex<Vec<LlmRequest>>>) {
@@ -29,6 +30,7 @@ pub fn recording_mock_provider(
 /// the two responses the non-streaming pipeline now consumes (visible text
 /// first, delta JSON second).  Mirrors the historical shape the pipeline used
 /// before the secrecy-boundary split so tests don't need rewriting twice.
+#[allow(dead_code)]
 pub fn turn_responses(combined: impl IntoIterator<Item = String>) -> Vec<String> {
     combined
         .into_iter()
@@ -48,6 +50,7 @@ pub fn turn_responses(combined: impl IntoIterator<Item = String>) -> Vec<String>
 /// Concatenate every message body in a recorded request into one searchable
 /// string.  Used by secrecy-boundary tests to assert that GM-only facts are
 /// present or absent without matching against any specific section header.
+#[allow(dead_code)]
 pub fn joined_request_text(request: &LlmRequest) -> String {
     request
         .messages

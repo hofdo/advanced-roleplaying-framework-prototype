@@ -3,7 +3,10 @@ mod common;
 mod common_postgres;
 
 use axum::{body::Body, http::Request};
-use common::{json_body, mock_provider, sample_scenario, send_empty, send_empty_with_bearer, send_json};
+use common::{
+    joined_request_text, json_body, mock_provider, recording_mock_provider, sample_scenario,
+    send_empty, send_empty_with_bearer, send_json, turn_responses,
+};
 use common_postgres::{
     postgres_test_context, postgres_test_context_with_config, send_json_with_bearer,
 };
@@ -146,9 +149,12 @@ async fn non_streaming_turn_persists_messages_delta_state_and_events() {
     config.storage.backend = shared::StorageBackend::Postgres;
     config.admin.enabled = true;
     config.admin.token = Some(ADMIN_TOKEN.into());
-    let ctx = postgres_test_context_with_config(mock_provider([raw.to_string()]), config)
-        .await
-        .expect("test context");
+    let ctx = postgres_test_context_with_config(
+        mock_provider(turn_responses([raw.to_string()])),
+        config,
+    )
+    .await
+    .expect("test context");
     let scenario = sample_scenario();
 
     send_json(
@@ -249,8 +255,11 @@ async fn second_turn_uses_updated_state() {
             "event_log_entries": ["Second turn event."]
         }
     }"#;
-    let ctx = postgres_test_context(mock_provider([turn_one.to_string(), turn_two.to_string()]))
-        .await
+    let ctx = postgres_test_context(mock_provider(turn_responses([
+        turn_one.to_string(),
+        turn_two.to_string(),
+    ])))
+    .await
         .expect("test context");
     let scenario = sample_scenario();
 
@@ -512,7 +521,7 @@ async fn delta_with_unknown_npc_id_returns_422() {
             "event_log_entries": []
         }
     }"#;
-    let ctx = postgres_test_context(mock_provider([bad_delta.to_string()]))
+    let ctx = postgres_test_context(mock_provider(turn_responses([bad_delta.to_string()])))
         .await
         .expect("test context");
     let scenario = sample_scenario();
@@ -584,7 +593,10 @@ async fn dead_npc_attitude_change_returns_422() {
     config.admin.enabled = true;
     config.admin.token = Some(ADMIN_TOKEN.into());
     let ctx = postgres_test_context_with_config(
-        mock_provider([kill_turn.to_string(), invalid_turn.to_string()]),
+        mock_provider(turn_responses([
+            kill_turn.to_string(),
+            invalid_turn.to_string(),
+        ])),
         config,
     )
     .await
@@ -706,9 +718,12 @@ async fn debug_turn_returns_applied_delta() {
     config.storage.backend = shared::StorageBackend::Postgres;
     config.admin.enabled = true;
     config.admin.token = Some(ADMIN_TOKEN.into());
-    let ctx = postgres_test_context_with_config(mock_provider([raw.to_string()]), config)
-        .await
-        .expect("test context");
+    let ctx = postgres_test_context_with_config(
+        mock_provider(turn_responses([raw.to_string()])),
+        config,
+    )
+    .await
+    .expect("test context");
     let scenario = sample_scenario();
 
     send_json(
@@ -861,7 +876,7 @@ async fn turn_response_and_export_do_not_leak_raw_provider_output() {
             "event_log_entries": []
         }
     }"#;
-    let ctx = postgres_test_context(mock_provider([raw_turn.to_string()]))
+    let ctx = postgres_test_context(mock_provider(turn_responses([raw_turn.to_string()])))
         .await
         .expect("test context");
     let scenario = sample_scenario();
@@ -948,7 +963,7 @@ async fn raw_provider_output_remains_null_when_storage_disabled() {
             "event_log_entries": []
         }
     }"#;
-    let ctx = postgres_test_context(mock_provider([raw_turn.to_string()]))
+    let ctx = postgres_test_context(mock_provider(turn_responses([raw_turn.to_string()])))
         .await
         .expect("test context");
     let scenario = sample_scenario();
@@ -1015,7 +1030,7 @@ async fn raw_provider_output_is_persisted_when_storage_enabled() {
     let mut config = shared::AppConfig::default();
     config.storage.backend = shared::StorageBackend::Postgres;
     config.debug.store_raw_provider_output = true;
-    let ctx = postgres_test_context_with_config(mock_provider([raw_turn.to_string()]), config)
+    let ctx = postgres_test_context_with_config(mock_provider(turn_responses([raw_turn.to_string()])), config)
         .await
         .expect("test context");
     let scenario = sample_scenario();
@@ -1061,6 +1076,83 @@ async fn raw_provider_output_is_persisted_when_storage_enabled() {
         .expect("raw provider output column")
         .expect("raw output should be stored")
         .0;
-    assert_eq!(stored, serde_json::Value::String(raw_turn.to_string()));
+    // After the secrecy-boundary split, raw_provider_output captures only the
+    // visible-narration response; the oracle delta-extraction call is not
+    // persisted as a player-facing artifact.
+    assert_eq!(
+        stored,
+        serde_json::Value::String("The examiner nods cautiously.".to_owned()),
+    );
+    ctx.cleanup().await;
+}
+
+#[tokio::test]
+#[ignore = "requires Docker-backed Postgres integration"]
+async fn postgres_non_streaming_visible_prompt_does_not_receive_gm_only_fact() {
+    let visible = "The examiner watches you without lowering her hand from the alarm bell.";
+    let empty_delta = r#"{
+        "facts_to_add": [],
+        "npc_changes": [],
+        "faction_changes": [],
+        "quest_changes": [],
+        "clock_changes": [],
+        "relationship_changes": [],
+        "location_change": null,
+        "event_log_entries": []
+    }"#;
+    let (provider, recorded_requests) =
+        recording_mock_provider([visible.to_owned(), empty_delta.to_owned()]);
+    let ctx = postgres_test_context(provider)
+        .await
+        .expect("test context");
+    let scenario = sample_scenario();
+
+    send_json(
+        &ctx.router,
+        "POST",
+        "/scenarios",
+        serde_json::to_value(&scenario).unwrap(),
+    )
+    .await;
+    let (_, session_body) = send_json(
+        &ctx.router,
+        "POST",
+        "/sessions",
+        json!({ "scenario_id": scenario.id, "title": "Secrecy Boundary Postgres" }),
+    )
+    .await;
+    let session: persistence::SessionRecord = json_body(&session_body);
+
+    let (status, _) = send_json(
+        &ctx.router,
+        "POST",
+        &format!("/sessions/{}/turn", session.id),
+        json!({
+            "input": "I ask the examiner what the soul-mark really means.",
+            "mode": "action",
+        }),
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+
+    let requests = recorded_requests.lock().expect("recorded requests");
+    assert_eq!(requests.len(), 2);
+    assert!(
+        !joined_request_text(&requests[0]).contains("soul-mark was not created"),
+        "first (visible) request must not include GM-only fact text"
+    );
+    assert!(
+        joined_request_text(&requests[1]).contains("soul-mark was not created"),
+        "second (delta-extraction) request must include GM-only fact text"
+    );
+
+    // World state must have been mutated successfully (version bumped).
+    let version: i64 = sqlx::query_scalar("SELECT version FROM world_states WHERE session_id = $1")
+        .bind(session.id)
+        .fetch_one(&ctx.pool)
+        .await
+        .expect("version");
+    assert_eq!(version, 1);
+
     ctx.cleanup().await;
 }

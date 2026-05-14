@@ -2,12 +2,16 @@
 //! These are scenario-level correctness proofs, not unit tests.
 //! All require a Docker-backed Postgres integration environment.
 
+#[allow(dead_code)]
 mod common;
 #[allow(dead_code)]
 #[path = "common/postgres.rs"]
 mod common_postgres;
 
-use common::{json_body, mock_provider, sample_scenario, send_empty, send_empty_with_bearer, send_json};
+use common::{
+    json_body, mock_provider, sample_scenario, send_empty, send_empty_with_bearer, send_json,
+    turn_responses,
+};
 use common_postgres::postgres_test_context_with_config;
 use domain::{FrontendVisibleState, WorldState};
 use serde_json::{Value, json};
@@ -78,7 +82,7 @@ async fn flood_guildhall_advances_state_and_projection_hides_gm_only_facts() {
     }"#;
 
     let ctx = postgres_test_context_with_config(
-        mock_provider([flood_response.to_string()]),
+        mock_provider(turn_responses([flood_response.to_string()])),
         admin_postgres_config(),
     )
     .await
@@ -248,7 +252,7 @@ async fn role_drift_containment_strips_hidden_reasoning_from_visible_output() {
     }"#;
 
     let ctx = postgres_test_context_with_config(
-        mock_provider([drift_response.to_string()]),
+        mock_provider(turn_responses([drift_response.to_string()])),
         admin_postgres_config(),
     )
     .await
@@ -314,7 +318,7 @@ async fn secret_leakage_prevention_rejects_player_known_secret() {
     }"#;
 
     let ctx = postgres_test_context_with_config(
-        mock_provider([leaking_response.to_string()]),
+        mock_provider(turn_responses([leaking_response.to_string()])),
         admin_postgres_config(),
     )
     .await
@@ -392,7 +396,7 @@ async fn npc_knowledge_boundary_keeps_secret_internal() {
     }"#;
 
     let ctx = postgres_test_context_with_config(
-        mock_provider([npc_secret_response.to_string()]),
+        mock_provider(turn_responses([npc_secret_response.to_string()])),
         admin_postgres_config(),
     )
     .await
@@ -487,7 +491,7 @@ async fn missing_npc_visibility_keeps_missing_npc_in_projection() {
     }"#;
 
     let ctx = postgres_test_context_with_config(
-        mock_provider([missing_response.to_string()]),
+        mock_provider(turn_responses([missing_response.to_string()])),
         admin_postgres_config(),
     )
     .await
