@@ -1,0 +1,38 @@
+name: postgres integration
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  TEST_DATABASE_URL: postgres://roleplay:roleplay@127.0.0.1:5432/roleplay
+
+jobs:
+  ignored-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: roleplay
+          POSTGRES_USER: roleplay
+          POSTGRES_PASSWORD: roleplay
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U roleplay -d roleplay"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: API Postgres flows
+        run: cargo test -p api --test postgres_api_flows -- --ignored --test-threads=1
+      - name: Behavioral fixtures
+        run: cargo test -p api --test behavioral_fixtures -- --ignored --test-threads=1
+      - name: Persistence repositories
+        run: cargo test -p persistence --test repository_tests -- --ignored --test-threads=1
