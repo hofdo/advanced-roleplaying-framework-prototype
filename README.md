@@ -27,19 +27,9 @@ The current priority is **hardening correctness and secrecy boundaries**, not ex
 
 ### Known Limitations
 
-**Non-streaming secrecy boundary**
+**Secrecy boundary is split before state mutation**
 
-The streaming narration path now uses a narration-safe prompt context that excludes GM-only facts.
-
-The non-streaming turn path still asks the model to produce both:
-
-- player-visible `player_response`
-- structured `world_state_delta`
-
-from a shared context that includes GM-only facts. This is a known architectural limitation: player-visible narration and oracle/delta reasoning are still combined in one non-streaming LLM call. A safer future design is to split non-streaming turns into:
-
-1. narration-safe visible response generation
-2. oracle-context delta extraction
+Streaming and non-streaming turns generate player-visible narration from a narration-safe context. Structured delta extraction runs afterward with oracle context so hidden facts can affect state validation without being passed to player-visible narration. Secret-leak validation in the engine remains a second layer of defense.
 
 **Turn locking depends on storage mode**
 
