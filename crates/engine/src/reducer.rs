@@ -1,8 +1,10 @@
 use crate::ValidatedWorldStateDelta;
 use domain::{
-    ActiveSpeakerChange, ClockChange, Fact, FactSource, FactionChange, InventoryChange, NpcChange,
-    MemoryChange, MemoryEntry, QuestChange, QuestStatus, RelationshipChange, RelationshipState,
-    SceneChange, SummaryUpdate, WorldState,
+    ActionResolution, ActionResolutionChange, ActiveSpeakerChange, ClockChange, ClueChange,
+    ClueState, Fact, FactSource, FactionChange, InventoryChange, MemoryChange, MemoryEntry,
+    NpcChange, OffscreenAction, PlayerChange, PlayerCondition, PlayerGoal, PlayerTrait,
+    QuestChange, QuestStatus, RelationshipChange, RelationshipState, SceneChange, SummaryUpdate,
+    WorldState,
 };
 
 pub trait WorldStateReducer: Send + Sync {
@@ -52,7 +54,10 @@ impl WorldStateReducer for BasicWorldStateReducer {
                     importance,
                     ..
                 } => {
-                    if let Some(memory) = state.memories.iter_mut().find(|memory| memory.id == memory_id)
+                    if let Some(memory) = state
+                        .memories
+                        .iter_mut()
+                        .find(|memory| memory.id == memory_id)
                     {
                         memory.importance = importance;
                     }
@@ -72,6 +77,35 @@ impl WorldStateReducer for BasicWorldStateReducer {
                 related_secret_ids: fact.related_secret_ids.clone(),
                 reveal_condition_satisfied: fact.reveal_condition_satisfied.clone(),
             });
+        }
+
+        for change in delta.action_resolution_changes {
+            match change {
+                ActionResolutionChange::Recorded {
+                    intent,
+                    stakes,
+                    outcome,
+                    consequence,
+                    visible_to_player,
+                    linked_clock_ids,
+                    ..
+                } => {
+                    let id = format!(
+                        "action-{}-{}",
+                        state.version + 1,
+                        state.action_resolutions.len() + 1
+                    );
+                    state.action_resolutions.push(ActionResolution {
+                        id,
+                        intent,
+                        stakes,
+                        outcome,
+                        consequence,
+                        visible_to_player,
+                        linked_clock_ids,
+                    });
+                }
+            }
         }
 
         for change in delta.npc_changes {
@@ -132,6 +166,35 @@ impl WorldStateReducer for BasicWorldStateReducer {
                         npc.visible_to_player = visible_to_player;
                     }
                 }
+                NpcChange::AvailabilityChanged {
+                    npc_id,
+                    availability,
+                    ..
+                } => {
+                    if let Some(npc) = state.npcs.iter_mut().find(|npc| npc.npc_id == npc_id) {
+                        npc.availability = availability;
+                    }
+                }
+                NpcChange::IntentChanged { npc_id, intent, .. } => {
+                    if let Some(npc) = state.npcs.iter_mut().find(|npc| npc.npc_id == npc_id) {
+                        npc.current_intent = intent;
+                    }
+                }
+                NpcChange::OffscreenActionRecorded {
+                    npc_id,
+                    intent,
+                    result,
+                    visible_to_player,
+                    ..
+                } => {
+                    if let Some(npc) = state.npcs.iter_mut().find(|npc| npc.npc_id == npc_id) {
+                        npc.offscreen_actions.push(OffscreenAction {
+                            intent,
+                            result,
+                            visible_to_player,
+                        });
+                    }
+                }
             }
         }
 
@@ -181,6 +244,39 @@ impl WorldStateReducer for BasicWorldStateReducer {
                         .find(|faction| faction.faction_id == faction_id)
                     {
                         faction.hidden_notes.push(note);
+                    }
+                }
+                FactionChange::PressureChanged {
+                    faction_id, delta, ..
+                } => {
+                    if let Some(faction) = state
+                        .factions
+                        .iter_mut()
+                        .find(|faction| faction.faction_id == faction_id)
+                    {
+                        faction.pressure += delta;
+                    }
+                }
+                FactionChange::PublicPressureNoteAdded {
+                    faction_id, note, ..
+                } => {
+                    if let Some(faction) = state
+                        .factions
+                        .iter_mut()
+                        .find(|faction| faction.faction_id == faction_id)
+                    {
+                        faction.public_pressure_notes.push(note);
+                    }
+                }
+                FactionChange::HiddenPressureNoteAdded {
+                    faction_id, note, ..
+                } => {
+                    if let Some(faction) = state
+                        .factions
+                        .iter_mut()
+                        .find(|faction| faction.faction_id == faction_id)
+                    {
+                        faction.hidden_pressure_notes.push(note);
                     }
                 }
             }
@@ -290,6 +386,78 @@ impl WorldStateReducer for BasicWorldStateReducer {
             }
         }
 
+        for change in delta.player_changes {
+            match change {
+                PlayerChange::TraitAdded {
+                    trait_id,
+                    label,
+                    description,
+                    visible_to_player,
+                    ..
+                } => state.player.traits.push(PlayerTrait {
+                    id: trait_id,
+                    label,
+                    description,
+                    visible_to_player,
+                }),
+                PlayerChange::GoalAdded {
+                    goal_id,
+                    label,
+                    description,
+                    progress,
+                    visible_to_player,
+                    ..
+                } => state.player.goals.push(PlayerGoal {
+                    id: goal_id,
+                    label,
+                    description,
+                    progress,
+                    visible_to_player,
+                }),
+                PlayerChange::GoalProgressed { goal_id, delta, .. } => {
+                    if let Some(goal) = state
+                        .player
+                        .goals
+                        .iter_mut()
+                        .find(|goal| goal.id == goal_id)
+                    {
+                        goal.progress += delta;
+                    }
+                }
+                PlayerChange::ConditionAdded {
+                    condition_id,
+                    label,
+                    description,
+                    visible_to_player,
+                    ..
+                } => state.player.conditions.push(PlayerCondition {
+                    id: condition_id,
+                    label,
+                    description,
+                    visible_to_player,
+                }),
+                PlayerChange::ConditionCleared { condition_id, .. } => {
+                    state
+                        .player
+                        .conditions
+                        .retain(|condition| condition.id != condition_id);
+                }
+                PlayerChange::ResourceChanged {
+                    resource_id, delta, ..
+                } => {
+                    if let Some(resource) = state
+                        .player
+                        .resources
+                        .iter_mut()
+                        .find(|resource| resource.id == resource_id)
+                    {
+                        resource.current += delta;
+                    }
+                }
+                PlayerChange::GmNoteAdded { note, .. } => state.player.gm_notes.push(note),
+            }
+        }
+
         for change in delta.relationship_changes {
             match change {
                 RelationshipChange::Changed {
@@ -298,21 +466,8 @@ impl WorldStateReducer for BasicWorldStateReducer {
                     attitude_delta,
                     ..
                 } => {
-                    if let Some(relationship) =
-                        state.relationships.iter_mut().find(|relationship| {
-                            relationship.source_id == source_id
-                                && relationship.target_id == target_id
-                        })
-                    {
-                        relationship.attitude += attitude_delta;
-                    } else {
-                        state.relationships.push(RelationshipState {
-                            source_id,
-                            target_id,
-                            attitude: attitude_delta,
-                            notes: vec![],
-                        });
-                    }
+                    find_or_insert_relationship_mut(&mut state, &source_id, &target_id).attitude +=
+                        attitude_delta;
                 }
                 RelationshipChange::NoteAdded {
                     source_id,
@@ -320,20 +475,75 @@ impl WorldStateReducer for BasicWorldStateReducer {
                     note,
                     ..
                 } => {
-                    if let Some(relationship) =
-                        state.relationships.iter_mut().find(|relationship| {
-                            relationship.source_id == source_id
-                                && relationship.target_id == target_id
-                        })
-                    {
-                        relationship.notes.push(note);
+                    find_or_insert_relationship_mut(&mut state, &source_id, &target_id)
+                        .notes
+                        .push(note);
+                }
+                RelationshipChange::TrustChanged {
+                    source_id,
+                    target_id,
+                    delta,
+                    ..
+                } => {
+                    find_or_insert_relationship_mut(&mut state, &source_id, &target_id).trust +=
+                        delta;
+                }
+                RelationshipChange::SuspicionChanged {
+                    source_id,
+                    target_id,
+                    delta,
+                    ..
+                } => {
+                    find_or_insert_relationship_mut(&mut state, &source_id, &target_id)
+                        .suspicion += delta;
+                }
+                RelationshipChange::LoyaltyChanged {
+                    source_id,
+                    target_id,
+                    delta,
+                    ..
+                } => {
+                    find_or_insert_relationship_mut(&mut state, &source_id, &target_id).loyalty +=
+                        delta;
+                }
+            }
+        }
+
+        for change in delta.clue_changes {
+            match change {
+                ClueChange::Discovered {
+                    clue_id,
+                    text,
+                    linked_secret_ids,
+                    satisfied_reveal_conditions,
+                    visible_to_player,
+                    ..
+                } => {
+                    if let Some(existing) = state.clues.iter_mut().find(|clue| clue.id == clue_id) {
+                        *existing = ClueState {
+                            id: clue_id,
+                            text,
+                            linked_secret_ids,
+                            satisfied_reveal_conditions,
+                            visible_to_player,
+                        };
                     } else {
-                        state.relationships.push(RelationshipState {
-                            source_id,
-                            target_id,
-                            attitude: 0,
-                            notes: vec![note],
+                        state.clues.push(ClueState {
+                            id: clue_id,
+                            text,
+                            linked_secret_ids,
+                            satisfied_reveal_conditions,
+                            visible_to_player,
                         });
+                    }
+                }
+                ClueChange::VisibilityChanged {
+                    clue_id,
+                    visible_to_player,
+                    ..
+                } => {
+                    if let Some(clue) = state.clues.iter_mut().find(|clue| clue.id == clue_id) {
+                        clue.visible_to_player = visible_to_player;
                     }
                 }
             }
@@ -347,6 +557,32 @@ impl WorldStateReducer for BasicWorldStateReducer {
         state.version += 1;
         state
     }
+}
+
+fn find_or_insert_relationship_mut<'a>(
+    state: &'a mut WorldState,
+    source_id: &str,
+    target_id: &str,
+) -> &'a mut RelationshipState {
+    if let Some(index) = state.relationships.iter().position(|relationship| {
+        relationship.source_id == source_id && relationship.target_id == target_id
+    }) {
+        return &mut state.relationships[index];
+    }
+
+    state.relationships.push(RelationshipState {
+        source_id: source_id.into(),
+        target_id: target_id.into(),
+        attitude: 0,
+        notes: vec![],
+        trust: 0,
+        suspicion: 0,
+        loyalty: 0,
+    });
+    state
+        .relationships
+        .last_mut()
+        .expect("relationship inserted")
 }
 
 #[cfg(test)]
@@ -373,6 +609,9 @@ mod tests {
                 public_notes: vec![],
                 hidden_notes: vec![],
                 revealed_goals: vec![],
+                pressure: 0,
+                public_pressure_notes: vec![],
+                hidden_pressure_notes: vec![],
             }],
             quests: vec![],
             clocks: vec![ClockState {
@@ -383,8 +622,11 @@ mod tests {
                 consequence: "Notice.".into(),
                 visible_to_player: true,
             }],
+            action_resolutions: vec![],
             relationships: vec![],
             inventory: vec![],
+            player: PlayerCharacterState::default(),
+            clues: vec![],
             memories: vec![],
             summary: None,
             recent_events: vec![],
@@ -431,12 +673,18 @@ mod tests {
                 attitude_to_player: None,
                 known_facts: vec![],
                 notes: vec![],
+                availability: NpcAvailability::Present,
+                current_intent: None,
+                offscreen_actions: vec![],
             }],
             factions: vec![],
             quests: vec![],
             clocks: vec![],
+            action_resolutions: vec![],
             relationships: vec![],
             inventory: vec![],
+            player: PlayerCharacterState::default(),
+            clues: vec![],
             memories: vec![],
             summary: None,
             recent_events: vec![],
@@ -481,6 +729,9 @@ mod tests {
             attitude_to_player: None,
             known_facts: vec![],
             notes: vec![],
+            availability: NpcAvailability::Present,
+            current_intent: None,
+            offscreen_actions: vec![],
         }];
         state.factions.clear();
         state.quests.clear();
@@ -716,6 +967,9 @@ mod tests {
             target_id: "examiner".into(),
             attitude: 5,
             notes: vec![],
+            trust: 0,
+            suspicion: 0,
+            loyalty: 0,
         }];
         let delta = ValidatedWorldStateDelta(WorldStateDelta {
             relationship_changes: vec![RelationshipChange::Changed {
@@ -747,8 +1001,11 @@ mod tests {
             factions: vec![],
             quests: vec![],
             clocks: vec![],
+            action_resolutions: vec![],
             relationships: vec![],
             inventory: vec![],
+            player: PlayerCharacterState::default(),
+            clues: vec![],
             memories: vec![],
             summary: None,
             recent_events: vec![],
@@ -784,6 +1041,9 @@ mod tests {
                 attitude_to_player: None,
                 known_facts: vec![],
                 notes: vec![],
+                availability: NpcAvailability::Present,
+                current_intent: None,
+                offscreen_actions: vec![],
             }],
             factions: vec![FactionState {
                 faction_id: "guild".into(),
@@ -791,6 +1051,9 @@ mod tests {
                 public_notes: vec![],
                 hidden_notes: vec![],
                 revealed_goals: vec![],
+                pressure: 0,
+                public_pressure_notes: vec![],
+                hidden_pressure_notes: vec![],
             }],
             quests: vec![],
             clocks: vec![ClockState {
@@ -801,13 +1064,19 @@ mod tests {
                 consequence: "The guild locks down.".into(),
                 visible_to_player: true,
             }],
+            action_resolutions: vec![],
             relationships: vec![RelationshipState {
                 source_id: "examiner".into(),
                 target_id: "guild".into(),
                 attitude: 1,
                 notes: vec![],
+                trust: 0,
+                suspicion: 0,
+                loyalty: 0,
             }],
             inventory: vec![],
+            player: PlayerCharacterState::default(),
+            clues: vec![],
             memories: vec![],
             summary: Some("Before the confrontation".into()),
             recent_events: vec![],

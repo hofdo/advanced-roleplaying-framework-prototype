@@ -227,10 +227,7 @@ mod tests {
         .await;
 
         let store: Arc<dyn ApplicationStore> = Arc::new(InMemoryApplicationStore::new(false));
-        let scenario = store
-            .create_scenario(scenario())
-            .await
-            .expect("scenario");
+        let scenario = store.create_scenario(scenario()).await.expect("scenario");
         let session = store
             .create_session(scenario.id, "override-turn".into())
             .await

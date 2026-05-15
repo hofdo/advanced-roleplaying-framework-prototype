@@ -95,4 +95,43 @@ mod tests {
             Some("steward-marta")
         );
     }
+
+    #[test]
+    fn bride_of_the_iron_archduke_tracks_core_pressure_clocks() {
+        let scenario = build_sample("bride-of-the-iron-archduke").expect("sample should build");
+        let clock_ids = scenario
+            .clocks
+            .iter()
+            .map(|clock| clock.id.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(clock_ids.contains(&"wedding-approaches"));
+        assert!(clock_ids.contains(&"imperial-pressure"));
+        assert!(clock_ids.contains(&"ashen-court-sabotage"));
+    }
+
+    #[test]
+    fn bride_of_the_iron_archduke_has_romance_boundary_rule() {
+        let scenario = build_sample("bride-of-the-iron-archduke").expect("sample should build");
+
+        assert!(
+            scenario
+                .rules
+                .iter()
+                .any(|rule| rule.contains("Romance should emerge"))
+        );
+    }
+
+    #[test]
+    fn bride_of_the_iron_archduke_keeps_key_reputation_secrets() {
+        let scenario = build_sample("bride-of-the-iron-archduke").expect("sample should build");
+        let secret_ids = scenario
+            .secrets
+            .iter()
+            .map(|secret| secret.id.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(secret_ids.contains(&"ashen-court-forged-rumors"));
+        assert!(secret_ids.contains(&"severin-protects-orphan-house"));
+    }
 }

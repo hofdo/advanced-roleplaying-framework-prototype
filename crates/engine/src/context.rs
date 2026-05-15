@@ -1,6 +1,7 @@
 use domain::{
-    Fact, FactVisibility, Faction, FactionState, Location, MemoryEntry, MemoryVisibility, Npc,
-    NpcStatus, QuestState, Scenario, SceneReasoningStyle, TurnMode, WorldState,
+    ActionResolution, ClueState, Fact, FactVisibility, Faction, FactionState, Location,
+    MemoryEntry, MemoryVisibility, Npc, NpcStatus, PlayerCharacterState, QuestState,
+    RelationshipState, Scenario, SceneReasoningStyle, TurnMode, WorldState,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -177,9 +178,14 @@ pub struct AgentContext {
     pub active_role: RoleActivationContext,
     pub scene_directive: ReasoningStyleDirective,
     pub relevant_npcs: Vec<NpcContext>,
+    pub offscreen_npc_activity: Vec<OffscreenNpcActivity>,
     pub relevant_factions: Vec<FactionContext>,
+    pub relevant_relationships: Vec<RelationshipState>,
     pub active_quests: Vec<QuestState>,
     pub active_clocks: Vec<domain::ClockState>,
+    pub recent_action_resolutions: Vec<ActionResolution>,
+    pub visible_clues: Vec<ClueState>,
+    pub player_state: PlayerCharacterState,
     pub player_known_facts: Vec<Fact>,
     pub gm_only_facts: Vec<Fact>,
     pub player_memories: Vec<MemoryEntry>,
@@ -195,6 +201,14 @@ pub struct NpcContext {
     pub npc: Npc,
     pub status: NpcStatus,
     pub attitude_to_player: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OffscreenNpcActivity {
+    pub npc_name: String,
+    pub intent: String,
+    pub result: String,
+    pub visible_to_player: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -240,7 +254,7 @@ impl ContextBuilder for BasicContextBuilder {
             })
             .cloned();
 
-        let relevant_npcs = input
+        let relevant_npcs: Vec<NpcContext> = input
             .scenario
             .npcs
             .iter()
@@ -249,6 +263,7 @@ impl ContextBuilder for BasicContextBuilder {
                     || input.world_state.npcs.iter().any(|state| {
                         state.npc_id == npc.id
                             && state.location_id == input.world_state.current_location_id
+                            && state.availability == domain::NpcAvailability::Present
                     })
             })
             .map(|npc| {
@@ -266,8 +281,31 @@ impl ContextBuilder for BasicContextBuilder {
                 }
             })
             .collect();
+        let offscreen_npc_activity = input
+            .scenario
+            .npcs
+            .iter()
+            .filter_map(|npc| {
+                input
+                    .world_state
+                    .npcs
+                    .iter()
+                    .find(|state| state.npc_id == npc.id)
+                    .and_then(|state| {
+                        state
+                            .offscreen_actions
+                            .last()
+                            .map(|action| OffscreenNpcActivity {
+                                npc_name: npc.name.clone(),
+                                intent: action.intent.clone(),
+                                result: action.result.clone(),
+                                visible_to_player: action.visible_to_player,
+                            })
+                    })
+            })
+            .collect::<Vec<_>>();
 
-        let relevant_factions = input
+        let relevant_factions: Vec<FactionContext> = input
             .scenario
             .factions
             .iter()
@@ -307,6 +345,61 @@ impl ContextBuilder for BasicContextBuilder {
         );
         let gm_only_memories =
             prioritized_memories(&input.world_state.memories, MemoryVisibility::GmOnly, 5);
+        let visible_clues = input
+            .world_state
+            .clues
+            .iter()
+            .filter(|clue| clue.visible_to_player)
+            .cloned()
+            .collect::<Vec<_>>();
+        let player_state = PlayerCharacterState {
+            traits: input
+                .world_state
+                .player
+                .traits
+                .iter()
+                .filter(|item| item.visible_to_player)
+                .cloned()
+                .collect(),
+            goals: input
+                .world_state
+                .player
+                .goals
+                .iter()
+                .filter(|item| item.visible_to_player)
+                .cloned()
+                .collect(),
+            conditions: input
+                .world_state
+                .player
+                .conditions
+                .iter()
+                .filter(|item| item.visible_to_player)
+                .cloned()
+                .collect(),
+            resources: input
+                .world_state
+                .player
+                .resources
+                .iter()
+                .filter(|item| item.visible_to_player)
+                .cloned()
+                .collect(),
+            gm_notes: input.world_state.player.gm_notes.clone(),
+        };
+        let relevant_relationships = input
+            .world_state
+            .relationships
+            .iter()
+            .filter(|relationship| {
+                relationship.source_id == "player"
+                    || relationship.target_id == "player"
+                    || relevant_npcs.iter().any(|npc| {
+                        npc.npc.id == relationship.source_id || npc.npc.id == relationship.target_id
+                    })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
 
         AgentContext {
             scenario_title: input.scenario.title.clone(),
@@ -315,7 +408,9 @@ impl ContextBuilder for BasicContextBuilder {
             active_role: input.active_role,
             scene_directive: input.scene_directive,
             relevant_npcs,
+            offscreen_npc_activity,
             relevant_factions,
+            relevant_relationships,
             active_quests: input
                 .world_state
                 .quests
@@ -329,6 +424,20 @@ impl ContextBuilder for BasicContextBuilder {
                 .cloned()
                 .collect(),
             active_clocks: input.world_state.clocks.clone(),
+            recent_action_resolutions: input
+                .world_state
+                .action_resolutions
+                .iter()
+                .rev()
+                .filter(|resolution| resolution.visible_to_player)
+                .take(5)
+                .cloned()
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect(),
+            visible_clues,
+            player_state,
             player_known_facts,
             gm_only_facts,
             player_memories,

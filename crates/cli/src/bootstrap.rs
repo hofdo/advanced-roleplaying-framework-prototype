@@ -8,10 +8,13 @@ use std::{path::PathBuf, sync::Arc};
 use anyhow::Result;
 use domain::SessionId;
 use engine::{InMemorySessionTurnLock, SessionTurnLock};
-use persistence::{ApplicationStore, InMemoryApplicationStore, PgPersistence, PostgresSessionTurnLock, ProviderRecord};
+use persistence::{
+    ApplicationStore, InMemoryApplicationStore, PgPersistence, PostgresSessionTurnLock,
+    ProviderRecord,
+};
 use providers::{LlmProvider, build_provider_from_config, build_provider_from_record_fields};
-use uuid::Uuid;
 use shared::{AppConfig, StorageBackend};
+use uuid::Uuid;
 
 pub struct CliRuntimeOptions {
     pub use_postgres: bool,
@@ -50,10 +53,9 @@ impl CliState {
     }
 
     pub async fn resolve_provider_by_id(&self, provider_id: Uuid) -> Result<Arc<dyn LlmProvider>> {
-        let record = self
-            .provider_record(provider_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("configured session provider {provider_id} is not available"))?;
+        let record = self.provider_record(provider_id).await?.ok_or_else(|| {
+            anyhow::anyhow!("configured session provider {provider_id} is not available")
+        })?;
         self.build_provider_from_record(&record)
     }
 
@@ -126,11 +128,7 @@ mod tests {
     use serde_json::json;
     use shared::ProviderConfig;
 
-    fn provider_record(
-        id: Uuid,
-        name: &str,
-        base_url: &str,
-    ) -> ProviderRecord {
+    fn provider_record(id: Uuid, name: &str, base_url: &str) -> ProviderRecord {
         ProviderRecord {
             id,
             name: name.into(),
@@ -251,10 +249,8 @@ mod tests {
             Err(error) => error,
         };
 
-        assert!(
-            error
-                .to_string()
-                .contains(&format!("configured session provider {missing_id} is not available"))
-        );
+        assert!(error.to_string().contains(&format!(
+            "configured session provider {missing_id} is not available"
+        )));
     }
 }

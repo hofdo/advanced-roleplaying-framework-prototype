@@ -1,7 +1,7 @@
 use domain::{
     ClockTemplate, EntityKey, Fact, FactSource, FactVisibility, Faction, FactionIdentity, Location,
-    Npc, NpcStatus, Quest, RoleIdentity, Scenario, ScenarioType, Secret, WorldState,
-    validate_npc_status_transition, validate_scenario,
+    Npc, NpcStatus, PlayerCharacterState, Quest, RevealCondition, RoleIdentity, Scenario,
+    ScenarioType, Secret, WorldState, validate_npc_status_transition, validate_scenario,
 };
 use uuid::Uuid;
 
@@ -69,7 +69,10 @@ fn scenario() -> Scenario {
         secrets: vec![Secret {
             id: "void-mark-source".into(),
             text: "The mark was not created by the goddess.".into(),
-            reveal_conditions: vec!["a divine relic reacts".into()],
+            reveal_conditions: vec![RevealCondition {
+                id: "divine-relic-reacts".into(),
+                description: "A divine relic reacts.".into(),
+            }],
         }],
         clocks: vec![ClockTemplate {
             id: "player-fame-spreads".into(),
@@ -160,7 +163,10 @@ fn world_state_authoritative_facts_can_distinguish_secret_visibility() {
                 visibility: FactVisibility::GmOnly,
                 known_by: vec![],
                 source: FactSource::Scenario,
-                reveal_conditions: vec!["a divine relic reacts".into()],
+                reveal_conditions: vec![RevealCondition {
+                    id: "divine-relic-reacts".into(),
+                    description: "A divine relic reacts.".into(),
+                }],
                 related_secret_ids: vec![],
                 reveal_condition_satisfied: None,
             },
@@ -169,8 +175,11 @@ fn world_state_authoritative_facts_can_distinguish_secret_visibility() {
         factions: vec![],
         quests: vec![],
         clocks: vec![],
+        action_resolutions: vec![],
         relationships: vec![],
         inventory: vec![],
+        player: PlayerCharacterState::default(),
+        clues: vec![],
         memories: vec![],
         summary: None,
         recent_events: vec![],

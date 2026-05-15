@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use domain::{
-    ClockState, Fact, FactSource, FactVisibility, FactionState, InventoryItem, MessageRecord,
-    NpcState, QuestState, QuestStatus, RelationshipState, Scenario, ScenarioId, SessionId,
-    WorldState,
+    ActionResolution, ClockState, ClueState, Fact, FactSource, FactVisibility, FactionState,
+    InventoryItem, MessageRecord, NpcAvailability, NpcState, PlayerCharacterState, QuestState,
+    QuestStatus, RelationshipState, Scenario, ScenarioId, SessionId, WorldState,
 };
 use engine::{LoadedTurnState, TurnPipelineError, TurnStateStore, ValidatedWorldStateDelta};
 use sqlx::Row;
@@ -11,8 +11,8 @@ use uuid::Uuid;
 
 use crate::{
     EventRecord, EventRepository, MessageRepository, PgPersistence, ProviderConfigRepository,
-    ProviderRecord, RawTimeline, RepoError, ScenarioRepository, SessionRecord,
-    SessionRepository, TimelineEntry, WorldStateDeltaRepository, WorldStateRepository,
+    ProviderRecord, RawTimeline, RepoError, ScenarioRepository, SessionRecord, SessionRepository,
+    TimelineEntry, WorldStateDeltaRepository, WorldStateRepository,
 };
 
 #[async_trait]
@@ -311,7 +311,8 @@ impl ApplicationStore for InMemoryApplicationStore {
         &self,
         session_id: SessionId,
     ) -> Result<Vec<TimelineEntry>, TurnPipelineError> {
-        InMemoryApplicationStore::snapshot_timeline(self, session_id).ok_or(TurnPipelineError::NotFound)
+        InMemoryApplicationStore::snapshot_timeline(self, session_id)
+            .ok_or(TurnPipelineError::NotFound)
     }
 
     async fn raw_timeline(
@@ -442,9 +443,7 @@ impl TurnStateStore for InMemoryApplicationStore {
             .entry(session_id)
             .or_default()
             .extend([user_timeline_entry, assistant_timeline_entry]);
-        inner
-            .world_states
-            .insert(session_id, updated_state);
+        inner.world_states.insert(session_id, updated_state);
         for description in delta.0.event_log_entries {
             let record = EventRecord {
                 id: Uuid::new_v4(),
@@ -957,6 +956,14 @@ pub fn initial_world_state(session_id: SessionId, scenario: &Scenario) -> WorldS
                 attitude_to_player: None,
                 known_facts: vec![],
                 notes: vec![],
+                availability: derive_npc_availability(
+                    npc.initial_status,
+                    npc.initial_visible_to_player,
+                    npc.initial_location_id.as_ref(),
+                    scenario.locations.first().map(|location| &location.id),
+                ),
+                current_intent: None,
+                offscreen_actions: vec![],
             })
             .collect(),
         factions: scenario
@@ -968,6 +975,9 @@ pub fn initial_world_state(session_id: SessionId, scenario: &Scenario) -> WorldS
                 public_notes: vec![],
                 hidden_notes: vec![],
                 revealed_goals: vec![],
+                pressure: 0,
+                public_pressure_notes: vec![],
+                hidden_pressure_notes: vec![],
             })
             .collect(),
         quests: scenario
@@ -996,11 +1006,38 @@ pub fn initial_world_state(session_id: SessionId, scenario: &Scenario) -> WorldS
                 visible_to_player: true,
             })
             .collect(),
+        action_resolutions: Vec::<ActionResolution>::new(),
         relationships: Vec::<RelationshipState>::new(),
         inventory: Vec::<InventoryItem>::new(),
+        player: PlayerCharacterState::default(),
+        clues: Vec::<ClueState>::new(),
         memories: vec![],
         summary: None,
         recent_events: vec![],
+    }
+}
+
+fn derive_npc_availability(
+    status: domain::NpcStatus,
+    visible_to_player: bool,
+    location_id: Option<&String>,
+    starting_location_id: Option<&String>,
+) -> NpcAvailability {
+    if matches!(
+        status,
+        domain::NpcStatus::Dead | domain::NpcStatus::Unconscious
+    ) {
+        return NpcAvailability::Unavailable;
+    }
+    if !visible_to_player {
+        return NpcAvailability::Offscreen;
+    }
+    if location_id.is_some() && location_id == starting_location_id {
+        NpcAvailability::Present
+    } else if location_id.is_some() {
+        NpcAvailability::Offscreen
+    } else {
+        NpcAvailability::Nearby
     }
 }
 

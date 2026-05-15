@@ -1,4 +1,4 @@
-use crate::{EntityKey, MessageId, ScenarioId, SessionId};
+use crate::{EntityKey, MessageId, RevealCondition, ScenarioId, SessionId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -14,8 +14,14 @@ pub struct WorldState {
     pub factions: Vec<FactionState>,
     pub quests: Vec<QuestState>,
     pub clocks: Vec<ClockState>,
+    #[serde(default)]
+    pub action_resolutions: Vec<ActionResolution>,
     pub relationships: Vec<RelationshipState>,
     pub inventory: Vec<InventoryItem>,
+    #[serde(default)]
+    pub player: PlayerCharacterState,
+    #[serde(default)]
+    pub clues: Vec<ClueState>,
     #[serde(default)]
     pub memories: Vec<MemoryEntry>,
     pub summary: Option<String>,
@@ -29,11 +35,12 @@ pub struct Fact {
     pub visibility: FactVisibility,
     pub known_by: Vec<EntityKey>,
     pub source: FactSource,
-    pub reveal_conditions: Vec<String>,
+    #[serde(default)]
+    pub reveal_conditions: Vec<RevealCondition>,
     #[serde(default)]
     pub related_secret_ids: Vec<EntityKey>,
     #[serde(default)]
-    pub reveal_condition_satisfied: Option<String>,
+    pub reveal_condition_satisfied: Option<ConditionRef>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -64,10 +71,36 @@ pub struct NpcState {
     pub attitude_to_player: Option<String>,
     pub known_facts: Vec<EntityKey>,
     pub notes: Vec<String>,
+    #[serde(default = "default_npc_availability")]
+    pub availability: NpcAvailability,
+    #[serde(default)]
+    pub current_intent: Option<String>,
+    #[serde(default)]
+    pub offscreen_actions: Vec<OffscreenAction>,
 }
 
 fn default_visible_to_player() -> bool {
     true
+}
+
+fn default_npc_availability() -> NpcAvailability {
+    NpcAvailability::Present
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NpcAvailability {
+    Present,
+    Nearby,
+    Offscreen,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OffscreenAction {
+    pub intent: String,
+    pub result: String,
+    pub visible_to_player: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -77,6 +110,12 @@ pub struct FactionState {
     pub public_notes: Vec<String>,
     pub hidden_notes: Vec<String>,
     pub revealed_goals: Vec<String>,
+    #[serde(default)]
+    pub pressure: i32,
+    #[serde(default)]
+    pub public_pressure_notes: Vec<String>,
+    #[serde(default)]
+    pub hidden_pressure_notes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -114,6 +153,118 @@ pub struct RelationshipState {
     pub target_id: EntityKey,
     pub attitude: i32,
     pub notes: Vec<String>,
+    #[serde(default)]
+    pub trust: i32,
+    #[serde(default)]
+    pub suspicion: i32,
+    #[serde(default)]
+    pub loyalty: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ActionResolution {
+    pub id: EntityKey,
+    pub intent: String,
+    pub stakes: Vec<String>,
+    pub outcome: ActionOutcome,
+    pub consequence: String,
+    pub visible_to_player: bool,
+    pub linked_clock_ids: Vec<EntityKey>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionOutcome {
+    Success,
+    SuccessWithCost,
+    Partial,
+    Failure,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct PlayerCharacterState {
+    #[serde(default)]
+    pub traits: Vec<PlayerTrait>,
+    #[serde(default)]
+    pub goals: Vec<PlayerGoal>,
+    #[serde(default)]
+    pub conditions: Vec<PlayerCondition>,
+    #[serde(default)]
+    pub resources: Vec<PlayerResource>,
+    #[serde(default)]
+    pub gm_notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PlayerTrait {
+    pub id: EntityKey,
+    pub label: String,
+    pub description: String,
+    #[serde(default = "default_visible_to_player")]
+    pub visible_to_player: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PlayerGoal {
+    pub id: EntityKey,
+    pub label: String,
+    pub description: String,
+    pub progress: i32,
+    #[serde(default = "default_visible_to_player")]
+    pub visible_to_player: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PlayerCondition {
+    pub id: EntityKey,
+    pub label: String,
+    pub description: String,
+    #[serde(default = "default_visible_to_player")]
+    pub visible_to_player: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PlayerResource {
+    pub id: EntityKey,
+    pub label: String,
+    pub current: i32,
+    pub min: i32,
+    pub max: i32,
+    #[serde(default = "default_visible_to_player")]
+    pub visible_to_player: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConditionRef {
+    pub id: EntityKey,
+    pub mode: MatchMode,
+}
+
+impl From<&str> for ConditionRef {
+    fn from(value: &str) -> Self {
+        Self {
+            id: value.into(),
+            mode: MatchMode::Exact,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MatchMode {
+    Exact,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ClueState {
+    pub id: EntityKey,
+    pub text: String,
+    #[serde(default)]
+    pub linked_secret_ids: Vec<EntityKey>,
+    #[serde(default)]
+    pub satisfied_reveal_conditions: Vec<ConditionRef>,
+    #[serde(default = "default_visible_to_player")]
+    pub visible_to_player: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -174,6 +325,8 @@ pub struct WorldStateDelta {
     #[serde(default)]
     pub facts_to_add: Vec<FactToAdd>,
     #[serde(default)]
+    pub action_resolution_changes: Vec<ActionResolutionChange>,
+    #[serde(default)]
     pub npc_changes: Vec<NpcChange>,
     #[serde(default)]
     pub faction_changes: Vec<FactionChange>,
@@ -185,6 +338,10 @@ pub struct WorldStateDelta {
     pub relationship_changes: Vec<RelationshipChange>,
     #[serde(default)]
     pub inventory_changes: Vec<InventoryChange>,
+    #[serde(default)]
+    pub player_changes: Vec<PlayerChange>,
+    #[serde(default)]
+    pub clue_changes: Vec<ClueChange>,
     #[serde(default)]
     pub location_change: Option<LocationChange>,
     #[serde(default)]
@@ -235,12 +392,27 @@ pub struct FactToAdd {
     pub text: String,
     pub visibility: FactVisibility,
     pub known_by: Vec<EntityKey>,
-    pub reveal_conditions: Vec<String>,
+    #[serde(default)]
+    pub reveal_conditions: Vec<RevealCondition>,
     pub reason: String,
     #[serde(default)]
     pub related_secret_ids: Vec<EntityKey>,
     #[serde(default)]
-    pub reveal_condition_satisfied: Option<String>,
+    pub reveal_condition_satisfied: Option<ConditionRef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ActionResolutionChange {
+    Recorded {
+        intent: String,
+        stakes: Vec<String>,
+        outcome: ActionOutcome,
+        consequence: String,
+        visible_to_player: bool,
+        linked_clock_ids: Vec<EntityKey>,
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -277,6 +449,23 @@ pub enum NpcChange {
         visible_to_player: bool,
         reason: String,
     },
+    AvailabilityChanged {
+        npc_id: EntityKey,
+        availability: NpcAvailability,
+        reason: String,
+    },
+    IntentChanged {
+        npc_id: EntityKey,
+        intent: Option<String>,
+        reason: String,
+    },
+    OffscreenActionRecorded {
+        npc_id: EntityKey,
+        intent: String,
+        result: String,
+        visible_to_player: bool,
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -298,6 +487,22 @@ pub enum FactionChange {
         reason: String,
     },
     HiddenNoteAdded {
+        faction_id: EntityKey,
+        note: String,
+        reason: String,
+    },
+    PressureChanged {
+        faction_id: EntityKey,
+        delta: i32,
+        public: bool,
+        reason: String,
+    },
+    PublicPressureNoteAdded {
+        faction_id: EntityKey,
+        note: String,
+        reason: String,
+    },
+    HiddenPressureNoteAdded {
         faction_id: EntityKey,
         note: String,
         reason: String,
@@ -361,6 +566,24 @@ pub enum RelationshipChange {
         note: String,
         reason: String,
     },
+    TrustChanged {
+        source_id: EntityKey,
+        target_id: EntityKey,
+        delta: i32,
+        reason: String,
+    },
+    SuspicionChanged {
+        source_id: EntityKey,
+        target_id: EntityKey,
+        delta: i32,
+        reason: String,
+    },
+    LoyaltyChanged {
+        source_id: EntityKey,
+        target_id: EntityKey,
+        delta: i32,
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -369,6 +592,69 @@ pub enum InventoryChange {
     Added { item: InventoryItem, reason: String },
     Removed { item_id: EntityKey, reason: String },
     Updated { item: InventoryItem, reason: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PlayerChange {
+    TraitAdded {
+        trait_id: EntityKey,
+        label: String,
+        description: String,
+        visible_to_player: bool,
+        reason: String,
+    },
+    GoalAdded {
+        goal_id: EntityKey,
+        label: String,
+        description: String,
+        progress: i32,
+        visible_to_player: bool,
+        reason: String,
+    },
+    GoalProgressed {
+        goal_id: EntityKey,
+        delta: i32,
+        reason: String,
+    },
+    ConditionAdded {
+        condition_id: EntityKey,
+        label: String,
+        description: String,
+        visible_to_player: bool,
+        reason: String,
+    },
+    ConditionCleared {
+        condition_id: EntityKey,
+        reason: String,
+    },
+    ResourceChanged {
+        resource_id: EntityKey,
+        delta: i32,
+        reason: String,
+    },
+    GmNoteAdded {
+        note: String,
+        reason: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ClueChange {
+    Discovered {
+        clue_id: EntityKey,
+        text: String,
+        linked_secret_ids: Vec<EntityKey>,
+        satisfied_reveal_conditions: Vec<ConditionRef>,
+        visible_to_player: bool,
+        reason: String,
+    },
+    VisibilityChanged {
+        clue_id: EntityKey,
+        visible_to_player: bool,
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -383,9 +669,19 @@ pub struct FrontendVisibleState {
     pub current_location: Option<VisibleLocation>,
     pub active_speaker: Option<VisibleNpc>,
     pub visible_npcs: Vec<VisibleNpc>,
+    #[serde(default)]
+    pub visible_factions: Vec<VisibleFaction>,
+    #[serde(default)]
+    pub visible_relationships: Vec<VisibleRelationship>,
     pub visible_quests: Vec<VisibleQuest>,
     pub visible_clocks: Vec<VisibleClock>,
     pub player_known_facts: Vec<VisibleFact>,
+    #[serde(default)]
+    pub visible_action_resolutions: Vec<VisibleActionResolution>,
+    #[serde(default)]
+    pub visible_clues: Vec<VisibleClue>,
+    #[serde(default)]
+    pub player: VisiblePlayerCharacterState,
     #[serde(default)]
     pub visible_memories: Vec<VisibleMemory>,
     pub recent_public_events: Vec<String>,
@@ -433,6 +729,29 @@ pub struct VisibleNpc {
     pub description: String,
     pub status: crate::NpcStatus,
     pub attitude_to_player: Option<String>,
+    pub availability: NpcAvailability,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VisibleFaction {
+    pub id: EntityKey,
+    pub name: String,
+    pub standing: i32,
+    pub pressure: i32,
+    pub public_notes: Vec<String>,
+    pub public_pressure_notes: Vec<String>,
+    pub revealed_goals: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VisibleRelationship {
+    pub source_id: EntityKey,
+    pub target_id: EntityKey,
+    pub attitude: i32,
+    pub trust: i32,
+    pub suspicion: i32,
+    pub loyalty: i32,
+    pub notes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -454,6 +773,35 @@ pub struct VisibleClock {
 pub struct VisibleFact {
     pub id: EntityKey,
     pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VisibleActionResolution {
+    pub id: EntityKey,
+    pub intent: String,
+    pub stakes: Vec<String>,
+    pub outcome: ActionOutcome,
+    pub consequence: String,
+    pub linked_clock_ids: Vec<EntityKey>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VisibleClue {
+    pub id: EntityKey,
+    pub text: String,
+    pub satisfied_reveal_conditions: Vec<ConditionRef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct VisiblePlayerCharacterState {
+    #[serde(default)]
+    pub traits: Vec<PlayerTrait>,
+    #[serde(default)]
+    pub goals: Vec<PlayerGoal>,
+    #[serde(default)]
+    pub conditions: Vec<PlayerCondition>,
+    #[serde(default)]
+    pub resources: Vec<PlayerResource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

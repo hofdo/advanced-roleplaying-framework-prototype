@@ -72,7 +72,12 @@
     {
       "id": "hidden-truth",
       "text": "A GM-only fact that must not be revealed until discovered.",
-      "reveal_conditions": ["what must happen before the secret can be revealed"]
+      "reveal_conditions": [
+        {
+          "id": "reveal-condition-id",
+          "description": "what must happen before the secret can be revealed"
+        }
+      ]
     }
   ],
   "clocks": [

@@ -3,7 +3,9 @@ use domain::FrontendVisibleState;
 use serde_json::Value;
 use shared::ReplayFixture;
 
-use crate::common::{json_body, mock_provider, send_empty, send_empty_with_bearer, send_json, turn_responses};
+use crate::common::{
+    json_body, mock_provider, send_empty, send_empty_with_bearer, send_json, turn_responses,
+};
 use crate::common_postgres::{postgres_test_context_with_config, send_json_with_bearer};
 
 const ADMIN_TOKEN: &str = "test-admin-token";
@@ -63,7 +65,8 @@ pub async fn run_fixture(raw: &str) -> Result<()> {
             "mode": turn.mode,
         });
 
-        let (status, body) = if turn.expected_delta.is_some() && turn.expected_status_code() == 200 {
+        let (status, body) = if turn.expected_delta.is_some() && turn.expected_status_code() == 200
+        {
             send_json_with_bearer(
                 &ctx.router,
                 "POST",
@@ -151,7 +154,10 @@ pub async fn run_fixture(raw: &str) -> Result<()> {
         );
     }
 
-    for hidden_id in &fixture.expected_final.hidden_fact_ids_absent_from_projection {
+    for hidden_id in &fixture
+        .expected_final
+        .hidden_fact_ids_absent_from_projection
+    {
         anyhow::ensure!(
             projected
                 .player_known_facts

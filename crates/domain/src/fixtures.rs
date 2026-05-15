@@ -1,8 +1,8 @@
 use crate::{
-    ClockState, ClockTemplate, Fact, FactSource, FactVisibility, Faction, FactionIdentity,
-    FactionState, InventoryItem, Location, Npc, NpcState, NpcStatus, Quest, QuestState,
-    QuestStatus, RelationshipState, RoleIdentity, Scenario, ScenarioType, Secret, WorldState,
-    WorldStateDelta,
+    ActionResolution, ClockState, ClockTemplate, ClueState, Fact, FactSource, FactVisibility,
+    Faction, FactionIdentity, FactionState, InventoryItem, Location, Npc, NpcAvailability,
+    NpcState, NpcStatus, PlayerCharacterState, Quest, QuestState, QuestStatus, RelationshipState,
+    RevealCondition, RoleIdentity, Scenario, ScenarioType, Secret, WorldState, WorldStateDelta,
 };
 use uuid::Uuid;
 
@@ -104,6 +104,9 @@ pub fn world_state(scenario: &Scenario) -> WorldStateBuilder {
             attitude_to_player: None,
             known_facts: vec![],
             notes: vec![],
+            availability: NpcAvailability::Present,
+            current_intent: None,
+            offscreen_actions: vec![],
         })
         .collect();
     let factions = scenario
@@ -115,6 +118,9 @@ pub fn world_state(scenario: &Scenario) -> WorldStateBuilder {
             public_notes: vec![],
             hidden_notes: vec![],
             revealed_goals: vec![],
+            pressure: 0,
+            public_pressure_notes: vec![],
+            hidden_pressure_notes: vec![],
         })
         .collect();
     let quests = scenario
@@ -153,8 +159,11 @@ pub fn world_state(scenario: &Scenario) -> WorldStateBuilder {
             factions,
             quests,
             clocks,
+            action_resolutions: Vec::<ActionResolution>::new(),
             relationships: vec![],
             inventory: vec![],
+            player: PlayerCharacterState::default(),
+            clues: Vec::<ClueState>::new(),
             memories: vec![],
             summary: None,
             recent_events: vec![],
@@ -279,6 +288,26 @@ impl ScenarioBuilder {
             reveal_conditions: vec![],
         };
         self.with_replaced_secret(secret)
+    }
+
+    pub fn with_secret_condition(
+        mut self,
+        secret_id: &str,
+        condition_id: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Self {
+        if let Some(secret) = self
+            .scenario
+            .secrets
+            .iter_mut()
+            .find(|secret| secret.id == secret_id)
+        {
+            secret.reveal_conditions.push(RevealCondition {
+                id: condition_id.into(),
+                description: description.into(),
+            });
+        }
+        self
     }
 
     pub fn build(self) -> Scenario {

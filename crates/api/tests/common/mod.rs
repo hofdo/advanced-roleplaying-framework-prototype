@@ -138,7 +138,10 @@ pub fn sample_scenario() -> Scenario {
         .build();
     scenario.tone = "heroic, consequence-driven, high fantasy".into();
     scenario.npcs[0].initial_location_id = None;
-    scenario.secrets[0].reveal_conditions = vec!["a divine relic reacts to the mark".into()];
+    scenario.secrets[0].reveal_conditions = vec![domain::RevealCondition {
+        id: "divine-relic-reacts".into(),
+        description: "a divine relic reacts to the mark".into(),
+    }];
     scenario.clocks[0].current = 1;
     scenario.clocks[0].max = 6;
     scenario

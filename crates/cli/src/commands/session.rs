@@ -277,8 +277,11 @@ mod tests {
             factions: vec![],
             quests: vec![],
             clocks: vec![],
+            action_resolutions: vec![],
             relationships: vec![],
             inventory: vec![],
+            player: domain::PlayerCharacterState::default(),
+            clues: vec![],
             memories: vec![],
             summary: None,
             recent_events: vec![],
@@ -300,7 +303,9 @@ mod tests {
         assert!(fixture.turns.is_empty());
         assert_eq!(fixture.expected_final.world_state_version, 2);
         assert_eq!(
-            fixture.expected_final.hidden_fact_ids_absent_from_projection,
+            fixture
+                .expected_final
+                .hidden_fact_ids_absent_from_projection,
             vec!["gm-secret".to_string()]
         );
     }

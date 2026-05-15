@@ -1195,6 +1195,198 @@ async fn non_streaming_turn_visible_prompt_does_not_receive_gm_only_fact() {
     );
 }
 
+#[tokio::test]
+async fn gameplay_state_turn_projects_player_social_clue_and_action_resolution_state() {
+    let raw = r#"{
+        "player_response": "The relic flares in your hands, the examiner's caution sharpening into respect while the guildhall tension rises.",
+        "world_state_delta": {
+            "facts_to_add": [
+                {
+                    "text": "The relic's reaction proves the soul-mark did not come from the goddess.",
+                    "visibility": "player_known",
+                    "known_by": [],
+                    "reveal_conditions": [],
+                    "reason": "The relic reacted openly in front of the player.",
+                    "related_secret_ids": ["void-mark"],
+                    "reveal_condition_satisfied": {"id":"divine-relic-reacts","mode":"exact"}
+                }
+            ],
+            "action_resolution_changes": [
+                {
+                    "type": "recorded",
+                    "intent": "Test the relic against the soul-mark before the room panics.",
+                    "stakes": ["the room may panic", "the guild may brand the player dangerous"],
+                    "outcome": "success_with_cost",
+                    "consequence": "The truth surfaces, but the guildhall grows more tense.",
+                    "visible_to_player": true,
+                    "linked_clock_ids": ["fame"],
+                    "reason": "The player forced a risky public reveal."
+                }
+            ],
+            "npc_changes": [
+                {
+                    "type": "offscreen_action_recorded",
+                    "npc_id": "examiner",
+                    "intent": "quietly alert senior guild leadership",
+                    "result": "a sealed warning reaches the upper offices",
+                    "visible_to_player": false,
+                    "reason": "The examiner escalates offscreen while staying composed."
+                }
+            ],
+            "faction_changes": [
+                {
+                    "type": "pressure_changed",
+                    "faction_id": "guild",
+                    "delta": 4,
+                    "public": true,
+                    "reason": "The guild needs visible control after the relic reaction."
+                },
+                {
+                    "type": "public_pressure_note_added",
+                    "faction_id": "guild",
+                    "note": "Witnesses expect the guild to respond decisively.",
+                    "reason": "The room now expects public action."
+                }
+            ],
+            "quest_changes": [],
+            "clock_changes": [
+                {
+                    "type": "advanced",
+                    "clock_id": "fame",
+                    "delta": 1,
+                    "reason": "Too many witnesses saw the relic react."
+                }
+            ],
+            "relationship_changes": [
+                {
+                    "type": "trust_changed",
+                    "source_id": "examiner",
+                    "target_id": "player",
+                    "delta": 2,
+                    "reason": "The player pursued the truth under pressure."
+                }
+            ],
+            "inventory_changes": [],
+            "player_changes": [
+                {
+                    "type": "goal_added",
+                    "goal_id": "understand-the-mark",
+                    "label": "Understand the Mark",
+                    "description": "Learn what the soul-mark really means.",
+                    "progress": 40,
+                    "visible_to_player": true,
+                    "reason": "The player now has a concrete lead."
+                },
+                {
+                    "type": "condition_added",
+                    "condition_id": "shaken",
+                    "label": "Shaken",
+                    "description": "The relic's reaction leaves the player rattled.",
+                    "visible_to_player": true,
+                    "reason": "The scene was emotionally intense."
+                }
+            ],
+            "clue_changes": [
+                {
+                    "type": "discovered",
+                    "clue_id": "relic-flare",
+                    "text": "The relic flared the instant it touched the soul-mark.",
+                    "linked_secret_ids": ["void-mark"],
+                    "satisfied_reveal_conditions": [{"id":"divine-relic-reacts","mode":"exact"}],
+                    "visible_to_player": true,
+                    "reason": "The player deliberately tested the relic."
+                }
+            ],
+            "location_change": null,
+            "event_log_entries": ["The relic reaction unsettled the guildhall."]
+        }
+    }"#;
+    let router = memory_test_context(mock_provider(turn_responses([raw.to_string()])));
+    let scenario = sample_scenario();
+
+    send_json(
+        &router,
+        "POST",
+        "/scenarios",
+        serde_json::to_value(&scenario).unwrap(),
+    )
+    .await;
+    let (_, session_body) = send_json(
+        &router,
+        "POST",
+        "/sessions",
+        json!({ "scenario_id": scenario.id, "title": "Gameplay State" }),
+    )
+    .await;
+    let session: Value = json_body(&session_body);
+    let session_id = session["id"].as_str().unwrap();
+
+    let (status, body) = send_json(
+        &router,
+        "POST",
+        &format!("/sessions/{session_id}/turn"),
+        json!({
+            "input": "I press the relic to the mark and force the truth into the open.",
+            "mode": "action"
+        }),
+    )
+    .await;
+    let payload: Value = json_body(&body);
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        payload["frontend_state_patch"]["changed_entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entity| entity["entity_type"] == "action_resolution")
+    );
+    assert!(
+        payload["frontend_state_patch"]["changed_entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entity| entity["entity_type"] == "player")
+    );
+
+    let visible = &payload["frontend_state_patch"]["visible_state"];
+    assert_eq!(
+        visible["visible_action_resolutions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        visible["visible_clues"].as_array().unwrap()[0]["id"],
+        "relic-flare"
+    );
+    assert_eq!(
+        visible["player"]["goals"].as_array().unwrap()[0]["id"],
+        "understand-the-mark"
+    );
+    assert_eq!(
+        visible["player"]["conditions"].as_array().unwrap()[0]["id"],
+        "shaken"
+    );
+    assert_eq!(
+        visible["visible_factions"].as_array().unwrap()[0]["pressure"],
+        4
+    );
+    assert_eq!(
+        visible["visible_relationships"].as_array().unwrap()[0]["trust"],
+        2
+    );
+    assert!(
+        visible["player_known_facts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|fact| fact["text"]
+                == "The relic's reaction proves the soul-mark did not come from the goddess.")
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Events
 // ---------------------------------------------------------------------------

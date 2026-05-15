@@ -112,12 +112,22 @@
     {
       "id": "armed-coup",
       "text": "Old Quays ships moved weapons for the failed coup under emergency grain manifests.",
-      "reveal_conditions": ["the player obtains dock manifests and a witness statement"]
+      "reveal_conditions": [
+        {
+          "id": "obtain-dock-manifests",
+          "description": "the player obtains dock manifests and a witness statement"
+        }
+      ]
     },
     {
       "id": "reform-power-grab",
       "text": "The Reform Bloc's emergency bill contains a clause granting temporary arrest powers without appeal.",
-      "reveal_conditions": ["the player reads the full bill or questions a nervous junior senator"]
+      "reveal_conditions": [
+        {
+          "id": "read-full-bill",
+          "description": "the player reads the full bill or questions a nervous junior senator"
+        }
+      ]
     }
   ],
   "clocks": [

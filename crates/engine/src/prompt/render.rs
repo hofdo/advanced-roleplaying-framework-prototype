@@ -153,6 +153,11 @@ pub(super) fn render_context(context: &AgentContext, player_input: &str) -> Stri
             ],
         ),
         render_facts_section(context, player_input, true),
+        render_player_state_section(context, true),
+        render_social_state_section(context, true),
+        render_npc_agency_section(context, true),
+        render_action_resolution_section(context),
+        render_clue_section(context),
         render_memory_section(context, true),
         render_single_value_section(
             "RECENT SUMMARY",
@@ -328,6 +333,11 @@ pub(super) fn render_narration_context(context: &AgentContext, player_input: &st
             ],
         ),
         render_facts_section(context, player_input, false),
+        render_player_state_section(context, false),
+        render_social_state_section(context, false),
+        render_npc_agency_section(context, false),
+        render_action_resolution_section(context),
+        render_clue_section(context),
         render_memory_section(context, false),
         render_single_value_section(
             "RECENT SUMMARY",
@@ -425,6 +435,213 @@ fn render_memory_section(context: &AgentContext, include_gm_only: bool) -> Strin
     }
 }
 
+fn render_player_state_section(context: &AgentContext, include_gm_only: bool) -> String {
+    let traits = if context.player_state.traits.is_empty() {
+        "none".into()
+    } else {
+        context
+            .player_state
+            .traits
+            .iter()
+            .map(|item| format!("{}: {}", item.label, item.description))
+            .collect::<Vec<_>>()
+            .join(" | ")
+    };
+    let goals = if context.player_state.goals.is_empty() {
+        "none".into()
+    } else {
+        context
+            .player_state
+            .goals
+            .iter()
+            .map(|item| format!("{} (progress: {})", item.label, item.progress))
+            .collect::<Vec<_>>()
+            .join(" | ")
+    };
+    let conditions = if context.player_state.conditions.is_empty() {
+        "none".into()
+    } else {
+        context
+            .player_state
+            .conditions
+            .iter()
+            .map(|item| item.label.clone())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    };
+    let resources = if context.player_state.resources.is_empty() {
+        "none".into()
+    } else {
+        context
+            .player_state
+            .resources
+            .iter()
+            .map(|item| format!("{} {}/{}", item.label, item.current, item.max))
+            .collect::<Vec<_>>()
+            .join(" | ")
+    };
+    let mut lines = vec![
+        format!("Traits: {traits}"),
+        format!("Goals: {goals}"),
+        format!("Conditions: {conditions}"),
+        format!("Resources: {resources}"),
+    ];
+    if include_gm_only {
+        lines.push(format!(
+            "GM notes: {}",
+            if context.player_state.gm_notes.is_empty() {
+                "none".into()
+            } else {
+                context.player_state.gm_notes.join(" | ")
+            }
+        ));
+    }
+    render_section("PLAYER CHARACTER", &lines)
+}
+
+fn render_social_state_section(context: &AgentContext, include_gm_only: bool) -> String {
+    let relationships = if context.relevant_relationships.is_empty() {
+        "none".into()
+    } else {
+        context
+            .relevant_relationships
+            .iter()
+            .map(|relationship| {
+                format!(
+                    "{} -> {} (attitude {}; trust {}; suspicion {}; loyalty {})",
+                    relationship.source_id,
+                    relationship.target_id,
+                    relationship.attitude,
+                    relationship.trust,
+                    relationship.suspicion,
+                    relationship.loyalty
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" | ")
+    };
+    let factions = if context.relevant_factions.is_empty() {
+        "none".into()
+    } else {
+        context
+            .relevant_factions
+            .iter()
+            .map(|faction| {
+                let Some(state) = &faction.state else {
+                    return faction.faction.name.clone();
+                };
+                let mut summary = format!(
+                    "{} (standing {}; pressure {})",
+                    faction.faction.name, state.standing, state.pressure
+                );
+                if !state.public_pressure_notes.is_empty() {
+                    summary.push_str(&format!(
+                        "; public pressure: {}",
+                        state.public_pressure_notes.join(" / ")
+                    ));
+                }
+                if include_gm_only && !state.hidden_pressure_notes.is_empty() {
+                    summary.push_str(&format!(
+                        "; hidden pressure: {}",
+                        state.hidden_pressure_notes.join(" / ")
+                    ));
+                }
+                summary
+            })
+            .collect::<Vec<_>>()
+            .join(" | ")
+    };
+    render_section(
+        "SOCIAL STATE",
+        &[
+            format!("Relationships: {relationships}"),
+            format!("Faction pressure: {factions}"),
+        ],
+    )
+}
+
+fn render_npc_agency_section(context: &AgentContext, include_hidden: bool) -> String {
+    let present = if context.relevant_npcs.is_empty() {
+        "none".into()
+    } else {
+        context
+            .relevant_npcs
+            .iter()
+            .map(|npc| {
+                format!(
+                    "{} ({:?}; attitude: {})",
+                    npc.npc.name,
+                    npc.status,
+                    npc.attitude_to_player.as_deref().unwrap_or("none")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" | ")
+    };
+    let offscreen = context
+        .offscreen_npc_activity
+        .iter()
+        .filter(|activity| include_hidden || activity.visible_to_player)
+        .map(|activity| {
+            format!(
+                "{}: {} -> {}",
+                activity.npc_name, activity.intent, activity.result
+            )
+        })
+        .collect::<Vec<_>>();
+    render_section(
+        "NPC AGENCY",
+        &[
+            format!("Present NPCs: {present}"),
+            format!(
+                "Offscreen activity: {}",
+                if offscreen.is_empty() {
+                    "none".into()
+                } else {
+                    offscreen.join(" | ")
+                }
+            ),
+        ],
+    )
+}
+
+fn render_action_resolution_section(context: &AgentContext) -> String {
+    render_section(
+        "ACTION RESOLUTIONS",
+        &[if context.recent_action_resolutions.is_empty() {
+            "none".into()
+        } else {
+            context
+                .recent_action_resolutions
+                .iter()
+                .map(|resolution| {
+                    format!(
+                        "{} -> {:?} ({})",
+                        resolution.intent, resolution.outcome, resolution.consequence
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" | ")
+        }],
+    )
+}
+
+fn render_clue_section(context: &AgentContext) -> String {
+    render_section(
+        "DISCOVERED CLUES",
+        &[if context.visible_clues.is_empty() {
+            "none".into()
+        } else {
+            context
+                .visible_clues
+                .iter()
+                .map(|clue| clue.text.clone())
+                .collect::<Vec<_>>()
+                .join(" | ")
+        }],
+    )
+}
+
 fn format_memory(memory: &domain::MemoryEntry) -> String {
     let related = if memory.related_entity_ids.is_empty() {
         String::new()
@@ -437,6 +654,18 @@ fn format_memory(memory: &domain::MemoryEntry) -> String {
     )
 }
 
+fn format_reveal_conditions(reveal_conditions: &[domain::RevealCondition]) -> String {
+    if reveal_conditions.is_empty() {
+        "none".into()
+    } else {
+        reveal_conditions
+            .iter()
+            .map(|condition| condition.description.clone())
+            .collect::<Vec<_>>()
+            .join("; ")
+    }
+}
+
 fn render_gm_only_facts(context: &AgentContext, player_input: &str) -> String {
     let relevant = relevant_gm_only_facts(context, player_input);
     if relevant.is_empty() {
@@ -445,11 +674,7 @@ fn render_gm_only_facts(context: &AgentContext, player_input: &str) -> String {
         relevant
             .iter()
             .map(|fact| {
-                let reveal_conditions = if fact.reveal_conditions.is_empty() {
-                    "none".into()
-                } else {
-                    fact.reveal_conditions.join("; ")
-                };
+                let reveal_conditions = format_reveal_conditions(&fact.reveal_conditions);
                 format!("{} (reveal conditions: {reveal_conditions})", fact.text)
             })
             .collect::<Vec<_>>()
@@ -491,7 +716,15 @@ fn relevant_gm_only_facts<'a>(
         .gm_only_facts
         .iter()
         .filter(|fact| {
-            let fact_text = format!("{} {}", fact.text, fact.reveal_conditions.join(" "));
+            let fact_text = format!(
+                "{} {}",
+                fact.text,
+                fact.reveal_conditions
+                    .iter()
+                    .map(|condition| format!("{} {}", condition.id, condition.description))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            );
             let fact_tokens = tokenize(&fact_text);
             !fact_tokens.is_disjoint(&cues)
         })

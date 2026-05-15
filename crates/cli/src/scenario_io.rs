@@ -126,9 +126,11 @@ mod tests {
 
     #[test]
     fn scenario_summary_names_opening_entities() {
-        let scenario =
-            parse_scenario_json(include_bytes!("../scenarios/templates/scenario.template.json"), "template")
-                .expect("template parses");
+        let scenario = parse_scenario_json(
+            include_bytes!("../scenarios/templates/scenario.template.json"),
+            "template",
+        )
+        .expect("template parses");
 
         let summary = scenario_summary(&scenario);
 

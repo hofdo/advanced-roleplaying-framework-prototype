@@ -1,7 +1,8 @@
 use domain::{
-    ClockChange, Fact, FactVisibility, FactionChange, InventoryChange, InventoryItem,
-    MemoryChange, MemoryVisibility, NpcChange, NpcState, NpcStatus, QuestChange,
-    RelationshipChange, SceneReasoningStyle, TurnMode, WorldState,
+    ActionOutcome, ActionResolutionChange, ClockChange, ConditionRef, Fact, FactVisibility,
+    FactionChange, InventoryChange, InventoryItem, MatchMode, MemoryChange, MemoryVisibility,
+    NpcAvailability, NpcChange, NpcState, NpcStatus, PlayerChange, QuestChange, RelationshipChange,
+    RevealCondition, SceneReasoningStyle, TurnMode, WorldState,
 };
 use serde_json::json;
 
@@ -27,6 +28,231 @@ fn world_state_without_memories_defaults_to_empty() {
     .unwrap();
 
     assert!(state.memories.is_empty());
+}
+
+#[test]
+fn world_state_without_gameplay_extensions_defaults_cleanly() {
+    let state: WorldState = serde_json::from_value(json!({
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "scenario_id": "00000000-0000-0000-0000-000000000002",
+        "version": 0,
+        "current_location_id": null,
+        "current_scene": null,
+        "active_speaker_id": null,
+        "facts": [],
+        "npcs": [],
+        "factions": [],
+        "quests": [],
+        "clocks": [],
+        "relationships": [],
+        "inventory": [],
+        "summary": null,
+        "recent_events": []
+    }))
+    .unwrap();
+
+    assert!(state.action_resolutions.is_empty());
+    assert!(state.clues.is_empty());
+    assert!(state.player.traits.is_empty());
+    assert!(state.player.goals.is_empty());
+    assert!(state.player.conditions.is_empty());
+    assert!(state.player.resources.is_empty());
+}
+
+#[test]
+fn legacy_relationship_and_faction_state_default_new_social_fields() {
+    let state: WorldState = serde_json::from_value(json!({
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "scenario_id": "00000000-0000-0000-0000-000000000002",
+        "version": 0,
+        "current_location_id": null,
+        "current_scene": null,
+        "active_speaker_id": null,
+        "facts": [],
+        "npcs": [],
+        "factions": [{
+            "faction_id": "imperial-throne",
+            "standing": 5,
+            "public_notes": [],
+            "hidden_notes": [],
+            "revealed_goals": []
+        }],
+        "quests": [],
+        "clocks": [],
+        "relationships": [{
+            "source_id": "archduke-severin",
+            "target_id": "player",
+            "attitude": 3,
+            "notes": ["watchful"]
+        }],
+        "inventory": [],
+        "summary": null,
+        "recent_events": []
+    }))
+    .unwrap();
+
+    assert_eq!(state.relationships[0].trust, 0);
+    assert_eq!(state.relationships[0].suspicion, 0);
+    assert_eq!(state.relationships[0].loyalty, 0);
+    assert_eq!(state.factions[0].pressure, 0);
+    assert!(state.factions[0].public_pressure_notes.is_empty());
+    assert!(state.factions[0].hidden_pressure_notes.is_empty());
+}
+
+#[test]
+fn legacy_npc_state_defaults_availability_and_empty_agency_fields() {
+    let npc: NpcState = serde_json::from_value(json!({
+        "npc_id": "archduke-severin",
+        "status": "active",
+        "visible_to_player": true,
+        "location_id": "frostmere-citadel",
+        "attitude_to_player": null,
+        "known_facts": [],
+        "notes": []
+    }))
+    .unwrap();
+
+    assert_eq!(npc.availability, NpcAvailability::Present);
+    assert!(npc.current_intent.is_none());
+    assert!(npc.offscreen_actions.is_empty());
+}
+
+#[test]
+fn action_resolution_change_recorded_roundtrips() {
+    let change: ActionResolutionChange = serde_json::from_value(json!({
+        "type": "recorded",
+        "intent": "Disarm the assassin before he reaches Marta.",
+        "stakes": ["Marta may be injured", "the crowd may panic"],
+        "outcome": "success_with_cost",
+        "consequence": "The assassin is stopped, but the alarm clock advances.",
+        "visible_to_player": true,
+        "linked_clock_ids": ["wedding"],
+        "reason": "The player chose a risky public action."
+    }))
+    .unwrap();
+
+    assert_eq!(
+        change,
+        ActionResolutionChange::Recorded {
+            intent: "Disarm the assassin before he reaches Marta.".into(),
+            stakes: vec!["Marta may be injured".into(), "the crowd may panic".into()],
+            outcome: ActionOutcome::SuccessWithCost,
+            consequence: "The assassin is stopped, but the alarm clock advances.".into(),
+            visible_to_player: true,
+            linked_clock_ids: vec!["wedding".into()],
+            reason: "The player chose a risky public action.".into(),
+        }
+    );
+}
+
+#[test]
+fn player_character_resource_change_roundtrips() {
+    let change: PlayerChange = serde_json::from_value(json!({
+        "type": "resource_changed",
+        "resource_id": "resolve",
+        "delta": -1,
+        "reason": "Elowen forced herself to stand firm in public."
+    }))
+    .unwrap();
+
+    assert_eq!(
+        change,
+        PlayerChange::ResourceChanged {
+            resource_id: "resolve".into(),
+            delta: -1,
+            reason: "Elowen forced herself to stand firm in public.".into(),
+        }
+    );
+}
+
+#[test]
+fn trust_and_pressure_changes_roundtrip() {
+    let trust: RelationshipChange = serde_json::from_value(json!({
+        "type": "trust_changed",
+        "source_id": "archduke-severin",
+        "target_id": "player",
+        "delta": 2,
+        "reason": "Elowen defended Falkenmark publicly."
+    }))
+    .unwrap();
+    let pressure: FactionChange = serde_json::from_value(json!({
+        "type": "pressure_changed",
+        "faction_id": "imperial-throne",
+        "delta": 5,
+        "public": true,
+        "reason": "The emperor expects progress before the wedding."
+    }))
+    .unwrap();
+
+    assert_eq!(
+        trust,
+        RelationshipChange::TrustChanged {
+            source_id: "archduke-severin".into(),
+            target_id: "player".into(),
+            delta: 2,
+            reason: "Elowen defended Falkenmark publicly.".into(),
+        }
+    );
+    assert_eq!(
+        pressure,
+        FactionChange::PressureChanged {
+            faction_id: "imperial-throne".into(),
+            delta: 5,
+            public: true,
+            reason: "The emperor expects progress before the wedding.".into(),
+        }
+    );
+}
+
+#[test]
+fn reveal_condition_and_condition_ref_roundtrip() {
+    let condition: RevealCondition = serde_json::from_value(json!({
+        "id": "inspect-treaty-seal",
+        "description": "Player physically inspects the treaty seal."
+    }))
+    .unwrap();
+    let reference: ConditionRef = serde_json::from_value(json!({
+        "id": "inspect-treaty-seal",
+        "mode": "exact"
+    }))
+    .unwrap();
+
+    assert_eq!(
+        condition,
+        RevealCondition {
+            id: "inspect-treaty-seal".into(),
+            description: "Player physically inspects the treaty seal.".into(),
+        }
+    );
+    assert_eq!(
+        reference,
+        ConditionRef {
+            id: "inspect-treaty-seal".into(),
+            mode: MatchMode::Exact,
+        }
+    );
+}
+
+#[test]
+fn scenario_secret_with_structured_reveal_conditions_roundtrips() {
+    let secret: domain::Secret = serde_json::from_value(json!({
+        "id": "poisoned-treaty",
+        "text": "The chancellor poisoned the treaty.",
+        "reveal_conditions": [
+            {
+                "id": "inspect-treaty-seal",
+                "description": "Player physically inspects the treaty seal."
+            },
+            {
+                "id": "interrogate-chancellor",
+                "description": "Player extracts a confession from the chancellor."
+            }
+        ]
+    }))
+    .unwrap();
+
+    assert_eq!(secret.reveal_conditions.len(), 2);
+    assert_eq!(secret.reveal_conditions[0].id, "inspect-treaty-seal");
 }
 
 #[test]

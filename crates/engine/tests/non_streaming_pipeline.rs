@@ -113,7 +113,10 @@ fn scenario_with_secret() -> Scenario {
         secrets: vec![Secret {
             id: "void-mark".into(),
             text: "The soul-mark was not created by the goddess.".into(),
-            reveal_conditions: vec!["a divine relic reacts to the mark".into()],
+            reveal_conditions: vec![domain::RevealCondition {
+                id: "divine-relic-reacts".into(),
+                description: "A divine relic reacts to the mark.".into(),
+            }],
         }],
         clocks: vec![],
     }
@@ -133,7 +136,10 @@ fn world_state(session_id: SessionId, scenario_id: ScenarioId) -> WorldState {
             visibility: FactVisibility::GmOnly,
             known_by: vec![],
             source: FactSource::Scenario,
-            reveal_conditions: vec!["a divine relic reacts to the mark".into()],
+            reveal_conditions: vec![domain::RevealCondition {
+                id: "divine-relic-reacts".into(),
+                description: "A divine relic reacts to the mark.".into(),
+            }],
             related_secret_ids: vec![],
             reveal_condition_satisfied: None,
         }],
@@ -144,6 +150,9 @@ fn world_state(session_id: SessionId, scenario_id: ScenarioId) -> WorldState {
             public_notes: vec![],
             hidden_notes: vec![],
             revealed_goals: vec![],
+            pressure: 0,
+            public_pressure_notes: vec![],
+            hidden_pressure_notes: vec![],
         }],
         quests: vec![],
         clocks: vec![ClockState {
@@ -154,8 +163,11 @@ fn world_state(session_id: SessionId, scenario_id: ScenarioId) -> WorldState {
             consequence: "Factions notice.".into(),
             visible_to_player: true,
         }],
+        action_resolutions: vec![],
         relationships: vec![],
         inventory: vec![],
+        player: domain::PlayerCharacterState::default(),
+        clues: vec![],
         memories: vec![],
         summary: None,
         recent_events: vec![],

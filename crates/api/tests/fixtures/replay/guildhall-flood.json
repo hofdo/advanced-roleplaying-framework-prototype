@@ -64,7 +64,12 @@
       {
         "id": "void-mark",
         "text": "The player's soul-mark was not created by the goddess.",
-        "reveal_conditions": ["a divine relic reacts to the mark"]
+        "reveal_conditions": [
+          {
+            "id": "divine-relic-reacts",
+            "description": "a divine relic reacts to the mark"
+          }
+        ]
       }
     ],
     "clocks": [

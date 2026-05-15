@@ -1,9 +1,10 @@
 use domain::{
-    ClockChange, EntityKey, Fact, FactVisibility, FactionChange, InventoryChange, LocationChange,
-    MemoryChange, NpcChange, NpcStatus, QuestChange, RelationshipChange, Scenario, WorldState,
-    WorldStateDelta, validate_npc_status_transition,
+    ActionResolutionChange, ClockChange, ClueChange, ConditionRef, EntityKey, Fact, FactVisibility,
+    FactionChange, InventoryChange, LocationChange, MatchMode, MemoryChange, NpcChange, NpcStatus,
+    PlayerChange, QuestChange, RelationshipChange, Scenario, WorldState, WorldStateDelta,
+    validate_npc_status_transition,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 
 #[derive(Debug, Clone)]
@@ -53,6 +54,20 @@ impl DeltaValidator for BasicDeltaValidator {
             .iter()
             .map(|location| location.id.as_str())
             .collect::<HashSet<_>>();
+        let secret_conditions = scenario
+            .secrets
+            .iter()
+            .map(|secret| {
+                (
+                    secret.id.as_str(),
+                    secret
+                        .reveal_conditions
+                        .iter()
+                        .map(|condition| condition.id.as_str())
+                        .collect::<HashSet<_>>(),
+                )
+            })
+            .collect::<HashMap<_, _>>();
 
         if let Some(scene_change) = &delta.scene_change {
             require_reason(&scene_change.reason)?;
@@ -67,6 +82,32 @@ impl DeltaValidator for BasicDeltaValidator {
 
         if let Some(summary_update) = &delta.summary_update {
             require_reason(&summary_update.reason)?;
+        }
+
+        for change in &delta.action_resolution_changes {
+            match change {
+                ActionResolutionChange::Recorded {
+                    intent,
+                    stakes,
+                    consequence,
+                    linked_clock_ids,
+                    reason,
+                    ..
+                } => {
+                    require_reason(reason)?;
+                    require_non_empty("action intent", intent)?;
+                    require_non_empty("action consequence", consequence)?;
+                    if stakes.iter().all(|stake| stake.trim().is_empty()) {
+                        return Err(DeltaValidationError::MissingActionStakes);
+                    }
+                    for clock_id in linked_clock_ids {
+                        require_known("clock", clock_id, &clock_ids)?;
+                    }
+                    if !delta_has_observable_consequence(delta) {
+                        return Err(DeltaValidationError::MissingActionConsequence);
+                    }
+                }
+            }
         }
 
         for change in &delta.memory_changes {
@@ -84,7 +125,11 @@ impl DeltaValidator for BasicDeltaValidator {
                 } => {
                     require_reason(reason)?;
                     validate_memory_importance(*importance)?;
-                    if !world_state.memories.iter().any(|memory| memory.id == *memory_id) {
+                    if !world_state
+                        .memories
+                        .iter()
+                        .any(|memory| memory.id == *memory_id)
+                    {
                         return Err(DeltaValidationError::UnknownEntity {
                             entity: "memory",
                             id: memory_id.clone(),
@@ -100,26 +145,24 @@ impl DeltaValidator for BasicDeltaValidator {
                 let leaked = find_leaked_gm_only_facts(world_state, &fact.text);
                 for gm_fact in &leaked {
                     let explicitly_ref = fact.related_secret_ids.iter().any(|id| id == &gm_fact.id);
-                    let has_proof = fact
-                        .reveal_condition_satisfied
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                        .is_some();
+                    let has_proof = fact.reveal_condition_satisfied.is_some();
                     let secret_has_reveal_conditions = !gm_fact.reveal_conditions.is_empty();
                     if !(explicitly_ref && has_proof && secret_has_reveal_conditions) {
                         return Err(DeltaValidationError::SecretLeak(fact.text.clone()));
                     }
                 }
-                if !fact.related_secret_ids.is_empty()
-                    && fact
-                        .reveal_condition_satisfied
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                        .is_none()
+                if !fact.related_secret_ids.is_empty() && fact.reveal_condition_satisfied.is_none()
                 {
                     return Err(DeltaValidationError::MissingRevealProof);
+                }
+                if let Some(condition_ref) = &fact.reveal_condition_satisfied {
+                    validate_secret_reveal_proof(
+                        world_state,
+                        delta,
+                        &secret_conditions,
+                        &fact.related_secret_ids,
+                        condition_ref,
+                    )?;
                 }
             }
         }
@@ -131,7 +174,10 @@ impl DeltaValidator for BasicDeltaValidator {
                 | NpcChange::StatusChanged { npc_id, .. }
                 | NpcChange::LocationChanged { npc_id, .. }
                 | NpcChange::NoteAdded { npc_id, .. }
-                | NpcChange::VisibilityChanged { npc_id, .. } => npc_id,
+                | NpcChange::VisibilityChanged { npc_id, .. }
+                | NpcChange::AvailabilityChanged { npc_id, .. }
+                | NpcChange::IntentChanged { npc_id, .. }
+                | NpcChange::OffscreenActionRecorded { npc_id, .. } => npc_id,
             };
 
             match change {
@@ -140,7 +186,10 @@ impl DeltaValidator for BasicDeltaValidator {
                 | NpcChange::StatusChanged { reason, .. }
                 | NpcChange::LocationChanged { reason, .. }
                 | NpcChange::NoteAdded { reason, .. }
-                | NpcChange::VisibilityChanged { reason, .. } => {
+                | NpcChange::VisibilityChanged { reason, .. }
+                | NpcChange::AvailabilityChanged { reason, .. }
+                | NpcChange::IntentChanged { reason, .. }
+                | NpcChange::OffscreenActionRecorded { reason, .. } => {
                     require_known("npc", npc_id, &npc_ids)?;
                     require_reason(reason)?;
                 }
@@ -170,6 +219,16 @@ impl DeltaValidator for BasicDeltaValidator {
                     }
                     NpcChange::NoteAdded { .. } => {}
                     NpcChange::VisibilityChanged { .. } => {}
+                    NpcChange::AvailabilityChanged { .. } => {}
+                    NpcChange::IntentChanged { .. } | NpcChange::OffscreenActionRecorded { .. } => {
+                        if matches!(npc.status, NpcStatus::Unconscious | NpcStatus::Dead) {
+                            return Err(DeltaValidationError::InvalidNpcStatusAction {
+                                npc_id: npc_id.clone(),
+                                status: npc.status,
+                                action: "agency change".into(),
+                            });
+                        }
+                    }
                     NpcChange::StatusChanged { .. } => {} // Always allowed — this is how you change status
                 }
             }
@@ -204,6 +263,15 @@ impl DeltaValidator for BasicDeltaValidator {
                 }
                 NpcChange::LocationChanged { location_id, .. } => {
                     require_known("location", location_id, &location_ids)?;
+                }
+                NpcChange::IntentChanged { intent, .. } => {
+                    if let Some(intent) = intent {
+                        require_non_empty("npc intent", intent)?;
+                    }
+                }
+                NpcChange::OffscreenActionRecorded { intent, result, .. } => {
+                    require_non_empty("npc offscreen intent", intent)?;
+                    require_non_empty("npc offscreen result", result)?;
                 }
                 _ => {}
             }
@@ -243,9 +311,37 @@ impl DeltaValidator for BasicDeltaValidator {
                 }
                 | FactionChange::HiddenNoteAdded {
                     faction_id, reason, ..
+                }
+                | FactionChange::PublicPressureNoteAdded {
+                    faction_id, reason, ..
+                }
+                | FactionChange::HiddenPressureNoteAdded {
+                    faction_id, reason, ..
                 } => {
                     require_known("faction", faction_id, &faction_ids)?;
                     require_reason(reason)?;
+                }
+                FactionChange::PressureChanged {
+                    faction_id,
+                    delta,
+                    reason,
+                    ..
+                } => {
+                    require_known("faction", faction_id, &faction_ids)?;
+                    require_reason(reason)?;
+                    let current = world_state
+                        .factions
+                        .iter()
+                        .find(|state| state.faction_id == *faction_id)
+                        .map(|state| state.pressure)
+                        .unwrap_or(0);
+                    let next = current + delta;
+                    if !(-100..=100).contains(&next) {
+                        return Err(DeltaValidationError::PressureOutOfRange {
+                            faction_id: faction_id.clone(),
+                            value: next,
+                        });
+                    }
                 }
             }
         }
@@ -327,20 +423,55 @@ impl DeltaValidator for BasicDeltaValidator {
                     target_id,
                     reason,
                     ..
+                }
+                | RelationshipChange::TrustChanged {
+                    source_id,
+                    target_id,
+                    reason,
+                    ..
+                }
+                | RelationshipChange::SuspicionChanged {
+                    source_id,
+                    target_id,
+                    reason,
+                    ..
+                }
+                | RelationshipChange::LoyaltyChanged {
+                    source_id,
+                    target_id,
+                    reason,
+                    ..
                 } => (source_id, target_id, reason),
             };
             require_reason(reason)?;
-            if !npc_ids.contains(source_id.as_str()) && !faction_ids.contains(source_id.as_str()) {
+            if !is_known_relationship_endpoint(source_id, &npc_ids, &faction_ids) {
                 return Err(DeltaValidationError::UnknownEntity {
                     entity: "relationship source",
                     id: source_id.clone(),
                 });
             }
-            if !npc_ids.contains(target_id.as_str()) && !faction_ids.contains(target_id.as_str()) {
+            if !is_known_relationship_endpoint(target_id, &npc_ids, &faction_ids) {
                 return Err(DeltaValidationError::UnknownEntity {
                     entity: "relationship target",
                     id: target_id.clone(),
                 });
+            }
+            match change {
+                RelationshipChange::TrustChanged { delta, .. }
+                | RelationshipChange::SuspicionChanged { delta, .. }
+                | RelationshipChange::LoyaltyChanged { delta, .. } => {
+                    let current =
+                        current_relationship_metric(world_state, source_id, target_id, change);
+                    let next = current + delta;
+                    if !(-100..=100).contains(&next) {
+                        return Err(DeltaValidationError::RelationshipMetricOutOfRange {
+                            source_id: source_id.clone(),
+                            target_id: target_id.clone(),
+                            value: next,
+                        });
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -367,6 +498,154 @@ impl DeltaValidator for BasicDeltaValidator {
                 InventoryChange::Updated { item, reason } => {
                     require_reason(reason)?;
                     require_known("inventory item", &item.id, &inventory_ids)?;
+                }
+            }
+        }
+
+        for change in &delta.player_changes {
+            match change {
+                PlayerChange::TraitAdded {
+                    trait_id,
+                    label,
+                    description,
+                    reason,
+                    ..
+                } => {
+                    require_reason(reason)?;
+                    require_non_empty("player trait id", trait_id)?;
+                    require_non_empty("player trait label", label)?;
+                    require_non_empty("player trait description", description)?;
+                }
+                PlayerChange::GoalAdded {
+                    goal_id,
+                    label,
+                    description,
+                    progress,
+                    reason,
+                    ..
+                } => {
+                    require_reason(reason)?;
+                    require_non_empty("player goal id", goal_id)?;
+                    require_non_empty("player goal label", label)?;
+                    require_non_empty("player goal description", description)?;
+                    validate_player_progress(*progress)?;
+                }
+                PlayerChange::GoalProgressed {
+                    goal_id,
+                    delta,
+                    reason,
+                } => {
+                    require_reason(reason)?;
+                    let goal = world_state
+                        .player
+                        .goals
+                        .iter()
+                        .find(|goal| goal.id == *goal_id)
+                        .ok_or_else(|| DeltaValidationError::UnknownEntity {
+                            entity: "player goal",
+                            id: goal_id.clone(),
+                        })?;
+                    validate_player_progress(goal.progress + delta)?;
+                }
+                PlayerChange::ConditionAdded {
+                    condition_id,
+                    label,
+                    description,
+                    reason,
+                    ..
+                } => {
+                    require_reason(reason)?;
+                    require_non_empty("player condition id", condition_id)?;
+                    require_non_empty("player condition label", label)?;
+                    require_non_empty("player condition description", description)?;
+                }
+                PlayerChange::ConditionCleared {
+                    condition_id,
+                    reason,
+                } => {
+                    require_reason(reason)?;
+                    if !world_state
+                        .player
+                        .conditions
+                        .iter()
+                        .any(|condition| condition.id == *condition_id)
+                    {
+                        return Err(DeltaValidationError::UnknownEntity {
+                            entity: "player condition",
+                            id: condition_id.clone(),
+                        });
+                    }
+                }
+                PlayerChange::ResourceChanged {
+                    resource_id,
+                    delta,
+                    reason,
+                } => {
+                    require_reason(reason)?;
+                    let resource = world_state
+                        .player
+                        .resources
+                        .iter()
+                        .find(|resource| resource.id == *resource_id)
+                        .ok_or_else(|| DeltaValidationError::UnknownEntity {
+                            entity: "player resource",
+                            id: resource_id.clone(),
+                        })?;
+                    let next = resource.current + delta;
+                    if next < resource.min || next > resource.max {
+                        return Err(DeltaValidationError::PlayerResourceOutOfRange {
+                            resource_id: resource_id.clone(),
+                            value: next,
+                            min: resource.min,
+                            max: resource.max,
+                        });
+                    }
+                }
+                PlayerChange::GmNoteAdded { note, reason } => {
+                    require_reason(reason)?;
+                    require_non_empty("player gm note", note)?;
+                }
+            }
+        }
+
+        for change in &delta.clue_changes {
+            match change {
+                ClueChange::Discovered {
+                    clue_id,
+                    text,
+                    linked_secret_ids,
+                    satisfied_reveal_conditions,
+                    reason,
+                    ..
+                } => {
+                    require_reason(reason)?;
+                    require_non_empty("clue id", clue_id)?;
+                    require_non_empty("clue text", text)?;
+                    validate_clue_links(
+                        clue_id,
+                        linked_secret_ids,
+                        satisfied_reveal_conditions,
+                        &secret_conditions,
+                    )?;
+                }
+                ClueChange::VisibilityChanged {
+                    clue_id, reason, ..
+                } => {
+                    require_reason(reason)?;
+                    if !world_state.clues.iter().any(|clue| clue.id == *clue_id)
+                        && !delta.clue_changes.iter().any(|candidate| {
+                            matches!(
+                                candidate,
+                                ClueChange::Discovered { clue_id: candidate_id, .. }
+                                    if candidate_id == clue_id
+                            )
+                        })
+                    {
+                        return Err(DeltaValidationError::UnknownEntity {
+                            entity: "clue",
+                            id: clue_id.clone(),
+                        });
+                    }
                 }
             }
         }
@@ -407,6 +686,14 @@ fn require_reason(reason: &str) -> Result<(), DeltaValidationError> {
     }
 }
 
+fn require_non_empty(label: &'static str, value: &str) -> Result<(), DeltaValidationError> {
+    if value.trim().is_empty() {
+        Err(DeltaValidationError::MissingField(label))
+    } else {
+        Ok(())
+    }
+}
+
 fn validate_memory_importance(importance: u8) -> Result<(), DeltaValidationError> {
     if importance <= 10 {
         Ok(())
@@ -434,24 +721,215 @@ fn leaks_gm_only_fact(world_state: &WorldState, text: &str) -> bool {
     !find_leaked_gm_only_facts(world_state, text).is_empty()
 }
 
+fn delta_has_observable_consequence(delta: &WorldStateDelta) -> bool {
+    !delta.facts_to_add.is_empty()
+        || !delta.npc_changes.is_empty()
+        || !delta.faction_changes.is_empty()
+        || !delta.quest_changes.is_empty()
+        || !delta.clock_changes.is_empty()
+        || !delta.relationship_changes.is_empty()
+        || !delta.inventory_changes.is_empty()
+        || !delta.player_changes.is_empty()
+        || !delta.clue_changes.is_empty()
+        || delta.location_change.is_some()
+        || !delta.event_log_entries.is_empty()
+}
+
+fn validate_player_progress(progress: i32) -> Result<(), DeltaValidationError> {
+    if (0..=100).contains(&progress) {
+        Ok(())
+    } else {
+        Err(DeltaValidationError::PlayerGoalProgressOutOfRange { value: progress })
+    }
+}
+
+fn is_known_relationship_endpoint(
+    id: &str,
+    npc_ids: &HashSet<&str>,
+    faction_ids: &HashSet<&str>,
+) -> bool {
+    id == "player" || npc_ids.contains(id) || faction_ids.contains(id)
+}
+
+fn current_relationship_metric(
+    world_state: &WorldState,
+    source_id: &str,
+    target_id: &str,
+    change: &RelationshipChange,
+) -> i32 {
+    let relationship = world_state.relationships.iter().find(|relationship| {
+        relationship.source_id == source_id && relationship.target_id == target_id
+    });
+    match change {
+        RelationshipChange::TrustChanged { .. } => relationship.map(|r| r.trust).unwrap_or(0),
+        RelationshipChange::SuspicionChanged { .. } => {
+            relationship.map(|r| r.suspicion).unwrap_or(0)
+        }
+        RelationshipChange::LoyaltyChanged { .. } => relationship.map(|r| r.loyalty).unwrap_or(0),
+        _ => 0,
+    }
+}
+
+fn validate_clue_links(
+    clue_id: &EntityKey,
+    linked_secret_ids: &[EntityKey],
+    satisfied_reveal_conditions: &[ConditionRef],
+    secret_conditions: &HashMap<&str, HashSet<&str>>,
+) -> Result<(), DeltaValidationError> {
+    for secret_id in linked_secret_ids {
+        if !secret_conditions.contains_key(secret_id.as_str()) {
+            return Err(DeltaValidationError::UnknownEntity {
+                entity: "secret",
+                id: secret_id.clone(),
+            });
+        }
+    }
+    if !linked_secret_ids.is_empty() && satisfied_reveal_conditions.is_empty() {
+        return Err(DeltaValidationError::MissingRevealProof);
+    }
+    for condition_ref in satisfied_reveal_conditions {
+        if !matches!(condition_ref.mode, MatchMode::Exact) {
+            return Err(DeltaValidationError::UnknownRevealCondition {
+                clue_id: clue_id.clone(),
+                condition_id: condition_ref.id.clone(),
+            });
+        }
+        if !linked_secret_ids.iter().any(|secret_id| {
+            secret_conditions
+                .get(secret_id.as_str())
+                .is_some_and(|conditions| conditions.contains(condition_ref.id.as_str()))
+        }) {
+            return Err(DeltaValidationError::UnknownRevealCondition {
+                clue_id: clue_id.clone(),
+                condition_id: condition_ref.id.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_secret_reveal_proof(
+    world_state: &WorldState,
+    delta: &WorldStateDelta,
+    secret_conditions: &HashMap<&str, HashSet<&str>>,
+    related_secret_ids: &[EntityKey],
+    condition_ref: &ConditionRef,
+) -> Result<(), DeltaValidationError> {
+    for secret_id in related_secret_ids {
+        let Some(conditions) = secret_conditions.get(secret_id.as_str()) else {
+            return Err(DeltaValidationError::UnknownEntity {
+                entity: "secret",
+                id: secret_id.clone(),
+            });
+        };
+        if !conditions.contains(condition_ref.id.as_str()) {
+            return Err(DeltaValidationError::UnknownRevealCondition {
+                clue_id: "secret-reveal-proof".into(),
+                condition_id: condition_ref.id.clone(),
+            });
+        }
+    }
+
+    let proof_visible_in_world = world_state.clues.iter().any(|clue| {
+        clue.visible_to_player
+            && related_secret_ids
+                .iter()
+                .all(|secret_id| clue.linked_secret_ids.contains(secret_id))
+            && clue
+                .satisfied_reveal_conditions
+                .iter()
+                .any(|candidate| candidate == condition_ref)
+    });
+    let proof_visible_in_delta = delta.clue_changes.iter().any(|change| match change {
+        ClueChange::Discovered {
+            linked_secret_ids,
+            satisfied_reveal_conditions,
+            visible_to_player,
+            ..
+        } => {
+            *visible_to_player
+                && related_secret_ids
+                    .iter()
+                    .all(|secret_id| linked_secret_ids.contains(secret_id))
+                && satisfied_reveal_conditions
+                    .iter()
+                    .any(|candidate| candidate == condition_ref)
+        }
+        ClueChange::VisibilityChanged {
+            clue_id,
+            visible_to_player,
+            ..
+        } => {
+            *visible_to_player
+                && world_state
+                    .clues
+                    .iter()
+                    .find(|clue| clue.id == *clue_id)
+                    .is_some_and(|clue| {
+                        related_secret_ids
+                            .iter()
+                            .all(|secret_id| clue.linked_secret_ids.contains(secret_id))
+                            && clue
+                                .satisfied_reveal_conditions
+                                .iter()
+                                .any(|candidate| candidate == condition_ref)
+                    })
+        }
+    });
+
+    if proof_visible_in_world || proof_visible_in_delta {
+        Ok(())
+    } else {
+        Err(DeltaValidationError::MissingRevealProof)
+    }
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum DeltaValidationError {
     #[error("unknown {entity} id: {id}")]
     UnknownEntity { entity: &'static str, id: EntityKey },
     #[error("missing required reason")]
     MissingReason,
+    #[error("missing or empty field: {0}")]
+    MissingField(&'static str),
     #[error("secret leak rejected: {0}")]
     SecretLeak(String),
     #[error("clock {clock_id} value out of range: {value}")]
     ClockOutOfRange { clock_id: EntityKey, value: i16 },
     #[error("faction {faction_id} standing out of range: {value}")]
     StandingOutOfRange { faction_id: EntityKey, value: i32 },
+    #[error("faction {faction_id} pressure out of range: {value}")]
+    PressureOutOfRange { faction_id: EntityKey, value: i32 },
     #[error("invalid NPC status transition: {0}")]
     InvalidStatus(String),
     #[error("memory importance out of range: {importance}")]
     MemoryImportanceOutOfRange { importance: i16 },
     #[error("PlayerKnown fact references secrets but provides no reveal_condition_satisfied proof")]
     MissingRevealProof,
+    #[error("missing action stakes")]
+    MissingActionStakes,
+    #[error("action resolution must produce an observable consequence")]
+    MissingActionConsequence,
+    #[error("unknown reveal condition {condition_id} for clue {clue_id}")]
+    UnknownRevealCondition {
+        clue_id: EntityKey,
+        condition_id: EntityKey,
+    },
+    #[error("player goal progress out of range: {value}")]
+    PlayerGoalProgressOutOfRange { value: i32 },
+    #[error("player resource {resource_id} out of range: {value} not in [{min}, {max}]")]
+    PlayerResourceOutOfRange {
+        resource_id: EntityKey,
+        value: i32,
+        min: i32,
+        max: i32,
+    },
+    #[error("relationship metric out of range for {source_id}->{target_id}: {value}")]
+    RelationshipMetricOutOfRange {
+        source_id: EntityKey,
+        target_id: EntityKey,
+        value: i32,
+    },
     #[error("NPC {npc_id} (status: {status:?}) cannot perform {action}")]
     InvalidNpcStatusAction {
         npc_id: EntityKey,
@@ -472,7 +950,10 @@ mod tests {
             .with_setting("high fantasy")
             .with_secret("void-mark", "The soul-mark was not created by the goddess.")
             .build();
-        scenario.secrets[0].reveal_conditions = vec!["divine relic reacts".into()];
+        scenario.secrets[0].reveal_conditions = vec![RevealCondition {
+            id: "divine-relic-reacts".into(),
+            description: "a divine relic reacts".into(),
+        }];
         scenario
     }
 
@@ -480,6 +961,16 @@ mod tests {
         let scenario = scenario();
         let mut world = fixtures::world_state(&scenario).build();
         world.quests[0].status = QuestStatus::Active;
+        world.clues = vec![ClueState {
+            id: "relic-flare".into(),
+            text: "The relic flares when held near the soul-mark.".into(),
+            linked_secret_ids: vec!["void-mark".into()],
+            satisfied_reveal_conditions: vec![ConditionRef {
+                id: "divine-relic-reacts".into(),
+                mode: MatchMode::Exact,
+            }],
+            visible_to_player: true,
+        }];
         world
     }
 
@@ -535,7 +1026,7 @@ mod tests {
                 known_by: vec![],
                 reveal_conditions: vec![],
                 reason: "Observed during the scene.".into(),
-                related_secret_ids: vec!["secret-vault".into()],
+                related_secret_ids: vec!["void-mark".into()],
                 reveal_condition_satisfied: None,
             }],
             ..WorldStateDelta::default()
@@ -557,8 +1048,11 @@ mod tests {
                 known_by: vec![],
                 reveal_conditions: vec![],
                 reason: "Observed during the scene.".into(),
-                related_secret_ids: vec!["secret-vault".into()],
-                reveal_condition_satisfied: Some("revealed via secret-vault".into()),
+                related_secret_ids: vec!["void-mark".into()],
+                reveal_condition_satisfied: Some(ConditionRef {
+                    id: "divine-relic-reacts".into(),
+                    mode: MatchMode::Exact,
+                }),
             }],
             ..WorldStateDelta::default()
         };
@@ -577,7 +1071,7 @@ mod tests {
                 known_by: vec![],
                 reveal_conditions: vec![],
                 reason: "GM background knowledge.".into(),
-                related_secret_ids: vec!["secret-vault".into()],
+                related_secret_ids: vec!["void-mark".into()],
                 reveal_condition_satisfied: None,
             }],
             ..WorldStateDelta::default()
@@ -734,7 +1228,10 @@ mod tests {
                 reveal_conditions: vec![],
                 reason: "The divine relic reacted in the player's hand.".into(),
                 related_secret_ids: vec!["void-mark".into()],
-                reveal_condition_satisfied: Some("divine relic reacted".into()),
+                reveal_condition_satisfied: Some(ConditionRef {
+                    id: "divine-relic-reacts".into(),
+                    mode: MatchMode::Exact,
+                }),
             }],
             ..WorldStateDelta::default()
         };
@@ -797,7 +1294,10 @@ mod tests {
             visibility: FactVisibility::GmOnly,
             known_by: vec![],
             source: FactSource::Scenario,
-            reveal_conditions: vec!["player opens the vault".into()],
+            reveal_conditions: vec![RevealCondition {
+                id: "open-vault".into(),
+                description: "player opens the vault".into(),
+            }],
             related_secret_ids: vec![],
             reveal_condition_satisfied: None,
         });
@@ -810,7 +1310,10 @@ mod tests {
                 reveal_conditions: vec![],
                 reason: "The player deduced both facts.".into(),
                 related_secret_ids: vec!["void-mark".into()],
-                reveal_condition_satisfied: Some("divine relic reacted".into()),
+                reveal_condition_satisfied: Some(ConditionRef {
+                    id: "divine-relic-reacts".into(),
+                    mode: MatchMode::Exact,
+                }),
             }],
             ..WorldStateDelta::default()
         };
@@ -835,7 +1338,10 @@ mod tests {
                 reveal_conditions: vec![],
                 reason: "The player claims to know.".into(),
                 related_secret_ids: vec!["void-mark".into()],
-                reveal_condition_satisfied: Some("some supposed trigger".into()),
+                reveal_condition_satisfied: Some(ConditionRef {
+                    id: "unknown-trigger".into(),
+                    mode: MatchMode::Exact,
+                }),
             }],
             ..WorldStateDelta::default()
         };
@@ -858,12 +1364,18 @@ mod tests {
             public_notes: vec![],
             hidden_notes: vec![],
             revealed_goals: vec![],
+            pressure: 0,
+            public_pressure_notes: vec![],
+            hidden_pressure_notes: vec![],
         });
         world.relationships.push(RelationshipState {
             source_id: "examiner".into(),
             target_id: "guild".into(),
             attitude: 0,
             notes: vec![],
+            trust: 0,
+            suspicion: 0,
+            loyalty: 0,
         });
         world.clocks.push(ClockState {
             id: "fame".into(),
@@ -1008,7 +1520,10 @@ mod tests {
 
         assert!(matches!(
             err,
-            DeltaValidationError::UnknownEntity { entity: "memory", .. }
+            DeltaValidationError::UnknownEntity {
+                entity: "memory",
+                ..
+            }
         ));
     }
 }

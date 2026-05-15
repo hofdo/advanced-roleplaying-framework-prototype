@@ -28,6 +28,27 @@ RELEVANT FACTS:
 Player-known facts: Witnesses saw abnormal mana in the guildhall
 GM-only facts (do not reveal unless justified): The guildhall panic will expose the hidden ruin (reveal conditions: if the panic clock reaches 4)
 
+PLAYER CHARACTER:
+Traits: Divine Marked: Carries an unstable soul-mark.
+Goals: Calm the Hall (progress: 40)
+Conditions: Drained
+Resources: Resolve 3/5
+GM notes: The player still hides how unstable the mark feels.
+
+SOCIAL STATE:
+Relationships: seraphyne -> player (attitude 2; trust 3; suspicion 1; loyalty 0)
+Faction pressure: Adventurers Guild (standing -2; pressure 3); public pressure: The guild wants visible control.; hidden pressure: Leaders fear a deeper anomaly.
+
+NPC AGENCY:
+Present NPCs: Seraphyne (Active; attitude: cautious warmth)
+Offscreen activity: Captain Roderic: secure the upper galleries -> quietly moved guards into position
+
+ACTION RESOLUTIONS:
+Stabilize the mana surge before the crowd panics. -> SuccessWithCost (The surge is contained, but the guild now watches closely.)
+
+DISCOVERED CLUES:
+The shattered crystal stand was sabotaged from inside the guildhall.
+
 CAMPAIGN MEMORY:
 Player-visible memory: The guild watched the player stabilize the mana surge. (importance: 6) [related: guild]
 GM-only memory: Seraphyne fears the anomaly is linked to the hidden ruin. (importance: 9) [related: hidden-ruin]
@@ -42,4 +63,4 @@ PLAYER INPUT:
 I ask Seraphyne what she truly fears.
 
 OUTPUT CONTRACT:
-Return strict JSON with keys player_response and world_state_delta. The delta may only use typed change arrays.
+Return strict JSON with keys player_response and world_state_delta. The delta may only use typed change arrays. For risky action turns, include action_resolution_changes with intent, stakes, outcome, and consequence.

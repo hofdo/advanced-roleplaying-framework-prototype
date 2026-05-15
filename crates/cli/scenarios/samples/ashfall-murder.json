@@ -112,12 +112,22 @@
     {
       "id": "ledger-relic",
       "text": "The victim's ledger contained a pressed black-glass relic wanted by the Cinder Veil.",
-      "reveal_conditions": ["the player finds ash sealed between the ledger pages"]
+      "reveal_conditions": [
+        {
+          "id": "find-ash-in-ledger",
+          "description": "the player finds ash sealed between the ledger pages"
+        }
+      ]
     },
     {
       "id": "guard-lost-ledger",
       "text": "Sergeant Orrin lost the confiscated ledger before the murder was discovered.",
-      "reveal_conditions": ["the player compares guard evidence logs with inn witness timing"]
+      "reveal_conditions": [
+        {
+          "id": "compare-guard-logs",
+          "description": "the player compares guard evidence logs with inn witness timing"
+        }
+      ]
     }
   ],
   "clocks": [

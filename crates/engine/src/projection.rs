@@ -1,8 +1,9 @@
 use crate::ValidatedWorldStateDelta;
 use domain::{
     EntityRef, FactVisibility, FrontendStatePatch, FrontendVisibleState, MemoryVisibility,
-    QuestStatus, Scenario, ViewerContext, VisibleClock, VisibleFact, VisibleLocation,
-    VisibleMemory, VisibleNpc, VisibleQuest, WorldState,
+    QuestStatus, Scenario, ViewerContext, VisibleActionResolution, VisibleClock, VisibleClue,
+    VisibleFact, VisibleFaction, VisibleLocation, VisibleMemory, VisibleNpc,
+    VisiblePlayerCharacterState, VisibleQuest, VisibleRelationship, WorldState,
 };
 
 pub trait FrontendStateProjector: Send + Sync {
@@ -59,6 +60,27 @@ impl FrontendStateProjector for BasicFrontendStateProjector {
                         description: npc.description.clone(),
                         status: npc_state.status,
                         attitude_to_player: npc_state.attitude_to_player.clone(),
+                        availability: npc_state.availability,
+                    })
+            })
+            .collect::<Vec<_>>();
+
+        let visible_factions = state
+            .factions
+            .iter()
+            .filter_map(|faction_state| {
+                scenario
+                    .factions
+                    .iter()
+                    .find(|faction| faction.id == faction_state.faction_id)
+                    .map(|faction| VisibleFaction {
+                        id: faction.id.clone(),
+                        name: faction.name.clone(),
+                        standing: faction_state.standing,
+                        pressure: faction_state.pressure,
+                        public_notes: faction_state.public_notes.clone(),
+                        public_pressure_notes: faction_state.public_pressure_notes.clone(),
+                        revealed_goals: faction_state.revealed_goals.clone(),
                     })
             })
             .collect::<Vec<_>>();
@@ -102,12 +124,84 @@ impl FrontendStateProjector for BasicFrontendStateProjector {
                 text: fact.text.clone(),
             })
             .collect();
+        let visible_relationships = state
+            .relationships
+            .iter()
+            .filter(|relationship| {
+                viewer.is_admin
+                    || relationship.source_id == "player"
+                    || relationship.target_id == "player"
+                    || visible_npcs.iter().any(|npc| {
+                        npc.id == relationship.source_id || npc.id == relationship.target_id
+                    })
+            })
+            .map(|relationship| VisibleRelationship {
+                source_id: relationship.source_id.clone(),
+                target_id: relationship.target_id.clone(),
+                attitude: relationship.attitude,
+                trust: relationship.trust,
+                suspicion: relationship.suspicion,
+                loyalty: relationship.loyalty,
+                notes: relationship.notes.clone(),
+            })
+            .collect::<Vec<_>>();
+        let visible_action_resolutions = state
+            .action_resolutions
+            .iter()
+            .filter(|resolution| viewer.is_admin || resolution.visible_to_player)
+            .map(|resolution| VisibleActionResolution {
+                id: resolution.id.clone(),
+                intent: resolution.intent.clone(),
+                stakes: resolution.stakes.clone(),
+                outcome: resolution.outcome,
+                consequence: resolution.consequence.clone(),
+                linked_clock_ids: resolution.linked_clock_ids.clone(),
+            })
+            .collect::<Vec<_>>();
+        let visible_clues = state
+            .clues
+            .iter()
+            .filter(|clue| viewer.is_admin || clue.visible_to_player)
+            .map(|clue| VisibleClue {
+                id: clue.id.clone(),
+                text: clue.text.clone(),
+                satisfied_reveal_conditions: clue.satisfied_reveal_conditions.clone(),
+            })
+            .collect::<Vec<_>>();
+        let player = VisiblePlayerCharacterState {
+            traits: state
+                .player
+                .traits
+                .iter()
+                .filter(|item| viewer.is_admin || item.visible_to_player)
+                .cloned()
+                .collect(),
+            goals: state
+                .player
+                .goals
+                .iter()
+                .filter(|item| viewer.is_admin || item.visible_to_player)
+                .cloned()
+                .collect(),
+            conditions: state
+                .player
+                .conditions
+                .iter()
+                .filter(|item| viewer.is_admin || item.visible_to_player)
+                .cloned()
+                .collect(),
+            resources: state
+                .player
+                .resources
+                .iter()
+                .filter(|item| viewer.is_admin || item.visible_to_player)
+                .cloned()
+                .collect(),
+        };
         let visible_memories = state
             .memories
             .iter()
-            .filter(|memory| {
-                viewer.is_admin || memory.visibility == MemoryVisibility::PlayerKnown
-            })
+            .filter(|memory| viewer.is_admin || memory.visibility == MemoryVisibility::PlayerKnown)
             .map(|memory| VisibleMemory {
                 id: memory.id.clone(),
                 text: memory.text.clone(),
@@ -121,9 +215,14 @@ impl FrontendStateProjector for BasicFrontendStateProjector {
             current_location,
             active_speaker,
             visible_npcs,
+            visible_factions,
+            visible_relationships,
             visible_quests,
             visible_clocks,
             player_known_facts,
+            visible_action_resolutions,
+            visible_clues,
+            player,
             visible_memories,
             recent_public_events: state.recent_events.clone(),
         }
@@ -167,7 +266,10 @@ pub fn changed_entities(state: &WorldState, delta: &ValidatedWorldStateDelta) ->
             | domain::NpcChange::StatusChanged { npc_id, .. }
             | domain::NpcChange::LocationChanged { npc_id, .. }
             | domain::NpcChange::NoteAdded { npc_id, .. }
-            | domain::NpcChange::VisibilityChanged { npc_id, .. } => npc_id,
+            | domain::NpcChange::VisibilityChanged { npc_id, .. }
+            | domain::NpcChange::AvailabilityChanged { npc_id, .. }
+            | domain::NpcChange::IntentChanged { npc_id, .. }
+            | domain::NpcChange::OffscreenActionRecorded { npc_id, .. } => npc_id,
         };
         push_unique(&mut refs, "npc", id);
     }
@@ -176,7 +278,10 @@ pub fn changed_entities(state: &WorldState, delta: &ValidatedWorldStateDelta) ->
             domain::FactionChange::StandingChanged { faction_id, .. }
             | domain::FactionChange::GoalRevealed { faction_id, .. }
             | domain::FactionChange::PublicNoteAdded { faction_id, .. }
-            | domain::FactionChange::HiddenNoteAdded { faction_id, .. } => faction_id,
+            | domain::FactionChange::HiddenNoteAdded { faction_id, .. }
+            | domain::FactionChange::PressureChanged { faction_id, .. }
+            | domain::FactionChange::PublicPressureNoteAdded { faction_id, .. }
+            | domain::FactionChange::HiddenPressureNoteAdded { faction_id, .. } => faction_id,
         };
         push_unique(&mut refs, "faction", id);
     }
@@ -208,9 +313,55 @@ pub fn changed_entities(state: &WorldState, delta: &ValidatedWorldStateDelta) ->
                 source_id,
                 target_id,
                 ..
+            }
+            | domain::RelationshipChange::TrustChanged {
+                source_id,
+                target_id,
+                ..
+            }
+            | domain::RelationshipChange::SuspicionChanged {
+                source_id,
+                target_id,
+                ..
+            }
+            | domain::RelationshipChange::LoyaltyChanged {
+                source_id,
+                target_id,
+                ..
             } => format!("{source_id}->{target_id}"),
         };
         push_unique(&mut refs, "relationship", &id);
+    }
+    for resolution in state
+        .action_resolutions
+        .iter()
+        .rev()
+        .take(delta.action_resolution_changes.len())
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+    {
+        push_unique(&mut refs, "action_resolution", &resolution.id);
+    }
+    for clue in state
+        .clues
+        .iter()
+        .rev()
+        .take(
+            delta
+                .clue_changes
+                .iter()
+                .filter(|change| matches!(change, domain::ClueChange::Discovered { .. }))
+                .count(),
+        )
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+    {
+        push_unique(&mut refs, "clue", &clue.id);
+    }
+    if !delta.player_changes.is_empty() {
+        push_unique(&mut refs, "player", "player");
     }
     if let Some(location) = &delta.location_change {
         push_unique(&mut refs, "location", &location.location_id);
@@ -312,8 +463,11 @@ mod tests {
             factions: vec![],
             quests: vec![],
             clocks: vec![],
+            action_resolutions: vec![],
             relationships: vec![],
             inventory: vec![],
+            player: PlayerCharacterState::default(),
+            clues: vec![],
             memories: vec![],
             summary: None,
             recent_events: vec![],
@@ -333,6 +487,9 @@ mod tests {
                 attitude_to_player: None,
                 known_facts: vec![],
                 notes: vec![],
+                availability: NpcAvailability::Present,
+                current_intent: None,
+                offscreen_actions: vec![],
             },
         );
 
@@ -358,6 +515,9 @@ mod tests {
                 attitude_to_player: None,
                 known_facts: vec![],
                 notes: vec![],
+                availability: NpcAvailability::Present,
+                current_intent: None,
+                offscreen_actions: vec![],
             },
         );
 
@@ -418,8 +578,11 @@ mod tests {
                     visible_to_player: false,
                 },
             ],
+            action_resolutions: vec![],
             relationships: vec![],
             inventory: vec![],
+            player: PlayerCharacterState::default(),
+            clues: vec![],
             memories: vec![],
             summary: None,
             recent_events: vec![],
@@ -556,8 +719,11 @@ mod tests {
             factions: vec![],
             quests: vec![],
             clocks: vec![],
+            action_resolutions: vec![],
             relationships: vec![],
             inventory: vec![],
+            player: PlayerCharacterState::default(),
+            clues: vec![],
             memories: vec![],
             summary: None,
             recent_events: vec![],

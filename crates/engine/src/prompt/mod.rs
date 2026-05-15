@@ -46,7 +46,7 @@ impl PromptBuilder for BasicPromptBuilder {
                 LlmMessage {
                     role: LlmMessageRole::User,
                     content: format!(
-                        "{}\n\nOUTPUT CONTRACT:\nReturn strict JSON with keys player_response and world_state_delta. The delta may only use typed change arrays.",
+                        "{}\n\nOUTPUT CONTRACT:\nReturn strict JSON with keys player_response and world_state_delta. The delta may only use typed change arrays. For risky action turns, include action_resolution_changes with intent, stakes, outcome, and consequence.",
                         render_context(context, player_input),
                     ),
                 },
@@ -95,7 +95,7 @@ impl PromptBuilder for BasicPromptBuilder {
                 LlmMessage {
                     role: LlmMessageRole::User,
                     content: format!(
-                        "{}\n\nVISIBLE RESPONSE:\n{}\n\nOUTPUT CONTRACT:\nReturn only world_state_delta JSON.",
+                        "{}\n\nVISIBLE RESPONSE:\n{}\n\nOUTPUT CONTRACT:\nReturn only world_state_delta JSON. For risky action turns, include action_resolution_changes with intent, stakes, outcome, and consequence.",
                         render_context(context, player_input),
                         visible_response
                     ),
@@ -143,9 +143,9 @@ fn system_rules(mode: Option<TurnMode>) -> String {
     .join("\n");
 
     let preamble = match mode {
-        Some(TurnMode::Action) => {
-            Some("The player is performing an in-world action. Narrate the outcome.")
-        }
+        Some(TurnMode::Action) => Some(
+            "The player is performing an in-world action. Narrate the outcome. For risky actions, track stakes and make the consequence visible.",
+        ),
         Some(TurnMode::Direct) => Some(
             "The player is asking an out-of-character question. Answer as GM directly and clearly. Do not stay in character.",
         ),
@@ -190,9 +190,14 @@ mod tests {
                 visible_response_shape: "narration".into(),
             },
             relevant_npcs: vec![],
+            offscreen_npc_activity: vec![],
             relevant_factions: vec![],
+            relevant_relationships: vec![],
             active_quests: vec![],
             active_clocks: vec![],
+            recent_action_resolutions: vec![],
+            visible_clues: vec![],
+            player_state: domain::PlayerCharacterState::default(),
             player_known_facts: vec![],
             gm_only_facts: vec![],
             player_memories: vec![],
@@ -274,7 +279,10 @@ mod tests {
             visibility: FactVisibility::GmOnly,
             known_by: vec![],
             source: FactSource::Scenario,
-            reveal_conditions: vec!["chancellor inspects treaty".into()],
+            reveal_conditions: vec![domain::RevealCondition {
+                id: "inspect-treaty".into(),
+                description: "The chancellor inspects the treaty.".into(),
+            }],
             related_secret_ids: vec![],
             reveal_condition_satisfied: None,
         });
@@ -342,8 +350,10 @@ mod tests {
 
     #[test]
     fn visible_response_prompt_includes_player_memory_only() {
-        let request = BasicPromptBuilder
-            .build_visible_response_prompt(&context_with_memories(), "I ask Marta what she thinks.");
+        let request = BasicPromptBuilder.build_visible_response_prompt(
+            &context_with_memories(),
+            "I ask Marta what she thinks.",
+        );
         let combined = request
             .messages
             .iter()
@@ -429,6 +439,12 @@ mod tests {
                 status: NpcStatus::Active,
                 attitude_to_player: Some("cautious warmth".into()),
             }],
+            offscreen_npc_activity: vec![crate::OffscreenNpcActivity {
+                npc_name: "Captain Roderic".into(),
+                intent: "secure the upper galleries".into(),
+                result: "quietly moved guards into position".into(),
+                visible_to_player: false,
+            }],
             relevant_factions: vec![FactionContext {
                 faction: Faction {
                     id: "guild".into(),
@@ -449,7 +465,19 @@ mod tests {
                     public_notes: vec!["Watching the player closely".into()],
                     hidden_notes: vec!["Preparing a sealed inquiry".into()],
                     revealed_goals: vec!["Keep order".into()],
+                    pressure: 3,
+                    public_pressure_notes: vec!["The guild wants visible control.".into()],
+                    hidden_pressure_notes: vec!["Leaders fear a deeper anomaly.".into()],
                 }),
+            }],
+            relevant_relationships: vec![domain::RelationshipState {
+                source_id: "seraphyne".into(),
+                target_id: "player".into(),
+                attitude: 2,
+                notes: vec!["Measured trust".into()],
+                trust: 3,
+                suspicion: 1,
+                loyalty: 0,
             }],
             active_quests: vec![QuestState {
                 quest_id: "mana-anomaly".into(),
@@ -465,6 +493,55 @@ mod tests {
                 consequence: "The guild seals the hall".into(),
                 visible_to_player: true,
             }],
+            recent_action_resolutions: vec![domain::ActionResolution {
+                id: "action-2-1".into(),
+                intent: "Stabilize the mana surge before the crowd panics.".into(),
+                stakes: vec!["the guildhall may erupt".into()],
+                outcome: domain::ActionOutcome::SuccessWithCost,
+                consequence: "The surge is contained, but the guild now watches closely.".into(),
+                visible_to_player: true,
+                linked_clock_ids: vec!["guildhall-panic".into()],
+            }],
+            visible_clues: vec![domain::ClueState {
+                id: "shattered-stand".into(),
+                text: "The shattered crystal stand was sabotaged from inside the guildhall.".into(),
+                linked_secret_ids: vec!["hidden-ruin".into()],
+                satisfied_reveal_conditions: vec![domain::ConditionRef {
+                    id: "inspect-stand".into(),
+                    mode: domain::MatchMode::Exact,
+                }],
+                visible_to_player: true,
+            }],
+            player_state: domain::PlayerCharacterState {
+                traits: vec![domain::PlayerTrait {
+                    id: "divine-marked".into(),
+                    label: "Divine Marked".into(),
+                    description: "Carries an unstable soul-mark.".into(),
+                    visible_to_player: true,
+                }],
+                goals: vec![domain::PlayerGoal {
+                    id: "calm-the-hall".into(),
+                    label: "Calm the Hall".into(),
+                    description: "Prevent the guildhall from collapsing into panic.".into(),
+                    progress: 40,
+                    visible_to_player: true,
+                }],
+                conditions: vec![domain::PlayerCondition {
+                    id: "drained".into(),
+                    label: "Drained".into(),
+                    description: "The recent surge left the body shaking.".into(),
+                    visible_to_player: true,
+                }],
+                resources: vec![domain::PlayerResource {
+                    id: "resolve".into(),
+                    label: "Resolve".into(),
+                    current: 3,
+                    min: 0,
+                    max: 5,
+                    visible_to_player: true,
+                }],
+                gm_notes: vec!["The player still hides how unstable the mark feels.".into()],
+            },
             player_known_facts: vec![Fact {
                 id: "known-1".into(),
                 text: "Witnesses saw abnormal mana in the guildhall".into(),
@@ -482,7 +559,10 @@ mod tests {
                     visibility: FactVisibility::GmOnly,
                     known_by: vec![],
                     source: FactSource::Turn,
-                    reveal_conditions: vec!["if the panic clock reaches 4".into()],
+                    reveal_conditions: vec![domain::RevealCondition {
+                        id: "panic-clock-four".into(),
+                        description: "if the panic clock reaches 4".into(),
+                    }],
                     related_secret_ids: vec!["hidden-ruin".into()],
                     reveal_condition_satisfied: None,
                 },
@@ -492,7 +572,10 @@ mod tests {
                     visibility: FactVisibility::GmOnly,
                     known_by: vec![],
                     source: FactSource::Turn,
-                    reveal_conditions: vec!["only during the harbor arc".into()],
+                    reveal_conditions: vec![domain::RevealCondition {
+                        id: "harbor-arc".into(),
+                        description: "only during the harbor arc".into(),
+                    }],
                     related_secret_ids: vec!["harbor-ledger".into()],
                     reveal_condition_satisfied: None,
                 },

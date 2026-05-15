@@ -3,9 +3,7 @@ use engine::{FrontendStateProjector, InMemorySessionTurnLock, SessionTurnLock, T
 use persistence::{
     PgPersistence, PostgresSessionTurnLock, ProviderConfigRepository, ProviderRecord,
 };
-use providers::{
-    LlmProvider, build_provider_from_record_fields,
-};
+use providers::{LlmProvider, build_provider_from_record_fields};
 use shared::{AppConfig, StorageBackend};
 use std::{collections::HashMap, sync::Arc};
 use thiserror::Error;

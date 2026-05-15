@@ -463,7 +463,7 @@ async fn timeline_lists_world_state_deltas_for_applied_turn() {
     assert_eq!(deltas.len(), 1);
     assert_eq!(deltas[0].validation_status, "applied");
     assert_eq!(deltas[0].delta, delta.0);
-  }
+}
 
 #[tokio::test]
 #[ignore = "requires Docker-backed Postgres integration"]

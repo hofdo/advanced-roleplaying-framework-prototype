@@ -123,7 +123,23 @@ pub struct QuestObjective {
 pub struct Secret {
     pub id: EntityKey,
     pub text: String,
-    pub reveal_conditions: Vec<String>,
+    #[serde(default)]
+    pub reveal_conditions: Vec<RevealCondition>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RevealCondition {
+    pub id: EntityKey,
+    pub description: String,
+}
+
+impl From<&str> for RevealCondition {
+    fn from(value: &str) -> Self {
+        Self {
+            id: value.into(),
+            description: value.into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

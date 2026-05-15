@@ -1,4 +1,6 @@
-use domain::{FactVisibility, FrontendVisibleState, Scenario, TurnMode, WorldState, WorldStateDelta};
+use domain::{
+    FactVisibility, FrontendVisibleState, Scenario, TurnMode, WorldState, WorldStateDelta,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

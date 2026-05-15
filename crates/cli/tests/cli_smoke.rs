@@ -323,7 +323,10 @@ async fn session_timeline_tracks_public_and_raw_history() {
     assert_eq!(response.world_state_version, 1);
 
     let timeline = store.timeline(session.id).await.expect("public timeline");
-    let kinds = timeline.iter().map(|entry| entry.kind.as_str()).collect::<Vec<_>>();
+    let kinds = timeline
+        .iter()
+        .map(|entry| entry.kind.as_str())
+        .collect::<Vec<_>>();
     let user_index = kinds
         .iter()
         .position(|kind| *kind == "user_message")
@@ -409,11 +412,17 @@ async fn export_fixture_draft_matches_schema() {
 
 #[test]
 fn scenario_validate_reports_valid_and_invalid_files() {
-    let valid = TempScenarioFile::write(include_str!("../scenarios/templates/scenario.template.json"));
+    let valid = TempScenarioFile::write(include_str!(
+        "../scenarios/templates/scenario.template.json"
+    ));
     let valid_path = valid.path.to_string_lossy().into_owned();
     let valid_output = run_cli(&["scenario", "validate", "--file", &valid_path]);
 
-    assert!(valid_output.status.success(), "stderr: {}", stderr(&valid_output));
+    assert!(
+        valid_output.status.success(),
+        "stderr: {}",
+        stderr(&valid_output)
+    );
     let valid_stdout = stdout(&valid_output);
     assert!(valid_stdout.contains("valid scenario:"));
     assert!(valid_stdout.contains("title:"));
@@ -487,8 +496,10 @@ fn provider_test_registered_requires_postgres_for_provider_id() {
     let config = TempConfigFile::write(&test_config_toml("test-default", "", "test-model"));
     let provider_id = Uuid::new_v4().to_string();
 
-    let output =
-        run_cli_with_config(&config, &["provider", "test", "--provider-id", &provider_id]);
+    let output = run_cli_with_config(
+        &config,
+        &["provider", "test", "--provider-id", &provider_id],
+    );
 
     assert!(!output.status.success());
     assert!(
@@ -512,6 +523,22 @@ fn scenario_inspect_prints_author_facing_summary() {
     assert!(rendered.contains("Title: The Bride of the Iron Archduke"));
     assert!(rendered.contains("Opening location:"));
     assert!(rendered.contains("Opening speaker:"));
+    assert!(rendered.contains("Clock count: 4"));
+}
+
+#[test]
+fn iron_archduke_sample_validates_with_expected_clock_count() {
+    let output = run_cli(&[
+        "scenario",
+        "validate",
+        "--file",
+        "scenarios/samples/bride-of-the-iron-archduke.json",
+    ]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let rendered = stdout(&output);
+    assert!(rendered.contains("valid scenario:"));
+    assert!(rendered.contains("clocks: 4"));
 }
 
 #[test]

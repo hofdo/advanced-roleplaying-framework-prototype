@@ -495,76 +495,125 @@
   ],
   "secrets": [
     {
+      "id": "ashen-court-forged-rumors",
+      "text": "Several of the worst stories about Severin were seeded by Ashen Court agents.",
+      "reveal_conditions": [
+        {
+          "id": "compare-rumor-accounts",
+          "description": "compare imperial rumor accounts with Falkenmark witnesses"
+        },
+        {
+          "id": "find-forged-correspondence",
+          "description": "find forged correspondence"
+        }
+      ]
+    },
+    {
+      "id": "severin-protects-orphan-house",
+      "text": "Severin quietly funds and inspects the Winter Orphan House because border wars orphaned children under his protection.",
+      "reveal_conditions": [
+        {
+          "id": "visit-winter-orphan-house",
+          "description": "visit the Winter Orphan House"
+        },
+        {
+          "id": "speak-with-sister-adela",
+          "description": "speak with Sister Adela privately"
+        }
+      ]
+    },
+    {
       "id": "children-rumor-truth",
       "text": "The rumor that Severin eats children originated from deliberate slander. In reality, he funds and protects orphan houses for children displaced by border wars, and personally ordered several noble estates seized to pay for them.",
       "reveal_conditions": [
-        "the player visits the Winter Orphan House or questions credible Falkenmark witnesses about the rumor"
+        {
+          "id": "visit-orphan-house",
+          "description": "the player visits the Winter Orphan House or questions credible Falkenmark witnesses about the rumor"
+        }
       ]
     },
     {
       "id": "heads-rumor-truth",
       "text": "Severin did order the execution of three noble warlords years ago, but only after they massacred surrendered villages, broke sworn oaths, and were convicted before a military tribunal. The court rumor that he beheads anyone who disagrees with him is a deliberate distortion.",
       "reveal_conditions": [
-        "the player investigates the origin of the severed-head rumor, questions Captain Roderic, or gains access to military records in the war room"
+        {
+          "id": "investigate-heads-rumor",
+          "description": "the player investigates the origin of the severed-head rumor, questions Captain Roderic, or gains access to military records in the war room"
+        }
       ]
     },
     {
       "id": "imperial-marriage-motive",
       "text": "Emperor Hadrian arranged the marriage primarily to bind Severin's military and magical power to the weakening imperial throne. Elowen's happiness was treated as secondary to political necessity.",
       "reveal_conditions": [
-        "the player obtains private imperial correspondence, confronts a trusted imperial envoy, or pieces together the emperor's strategic motive through multiple conversations"
+        {
+          "id": "obtain-imperial-correspondence",
+          "description": "the player obtains private imperial correspondence, confronts a trusted imperial envoy, or pieces together the emperor's strategic motive through multiple conversations"
+        }
       ]
     },
     {
       "id": "severin-fears-being-used",
       "text": "Severin agreed to the marriage because refusing would destabilize the north, but he suspects the princess may have been sent as a soft instrument of imperial control. He is watching for manipulation more than he is seeking affection.",
       "reveal_conditions": [
-        "the player earns Severin's trust in private conversation or witnesses a discussion between him and his inner household"
+        {
+          "id": "earn-severin-trust",
+          "description": "the player earns Severin's trust in private conversation or witnesses a discussion between him and his inner household"
+        }
       ]
     },
     {
       "id": "ysabet-informant",
       "text": "Lady Ysabet Vale has been instructed to report privately to the imperial court on the princess's emotional state, Severin's vulnerabilities, and any sign that Elowen might side with Falkenmark over the crown.",
       "reveal_conditions": [
-        "the player intercepts one of Ysabet's reports, notices inconsistencies in her advice, or confronts her after acquiring corroborating evidence"
+        {
+          "id": "intercept-ysabet-report",
+          "description": "the player intercepts one of Ysabet's reports, notices inconsistencies in her advice, or confronts her after acquiring corroborating evidence"
+        }
       ]
     },
     {
       "id": "cassian-sabotage",
       "text": "Lord Cassian Valehart is working for the Ashen Court to sabotage the marriage. His strategy is to keep Elowen frightened, provoke Severin into public coldness, and create the appearance that the union is unsafe.",
       "reveal_conditions": [
-        "the player catches Cassian coordinating rumors, discovers forged letters, or exposes his role through contradictions in his claims"
+        {
+          "id": "expose-cassian-rumors",
+          "description": "the player catches Cassian coordinating rumors, discovers forged letters, or exposes his role through contradictions in his claims"
+        }
       ]
     },
     {
       "id": "banquet-plot",
       "text": "A poisoning attempt is being prepared during the betrothal banquet. The conspirators intend for suspicion to fall on Falkenrath household staff, causing imperial outrage and rupturing the alliance.",
       "reveal_conditions": [
-        "the player investigates rising sabotage signs, questions guards or servants after suspicious incidents, or identifies Ashen Court coordination before the banquet"
+        {
+          "id": "investigate-banquet-plot",
+          "description": "the player investigates rising sabotage signs, questions guards or servants after suspicious incidents, or identifies Ashen Court coordination before the banquet"
+        }
       ]
     }
   ],
   "clocks": [
     {
       "id": "wedding-approaches",
-      "title": "The wedding date approaches",
+      "title": "The wedding approaches",
       "current": 1,
       "max": 6,
-      "consequence": "The marriage ceremony proceeds before the princess has fully resolved whether she trusts Severin or understands the political trap around her."
+      "consequence": "The chapel ceremony arrives before Elowen and Severin have resolved trust."
     },
     {
-      "id": "sabotage-escalates",
-      "title": "The Ashen Court's sabotage escalates",
-      "current": 1,
+      "id": "ashen-court-sabotage",
+      "title": "The Ashen Court sabotage advances",
+      "current": 0,
       "max": 6,
-      "consequence": "A major scandal or staged attack erupts, threatening to destroy the alliance and frame House Falkenrath."
+      "consequence": "A forged scandal or proxy attack threatens the betrothal."
     },
     {
       "id": "imperial-pressure",
       "title": "Imperial pressure tightens",
-      "current": 2,
+      "current": 1,
       "max": 6,
-      "consequence": "The emperor's agents begin pushing openly for compliance, narrowing Elowen's room to delay, investigate, or renegotiate the marriage."
+      "consequence": "The emperor demands public proof that the marriage binds Falkenmark to the throne."
     },
     {
       "id": "northern-trust",

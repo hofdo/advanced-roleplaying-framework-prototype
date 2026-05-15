@@ -4,15 +4,15 @@
 
 #[allow(dead_code)]
 mod common;
-#[path = "common/replay.rs"]
-mod replay;
 #[allow(dead_code)]
 #[path = "common/postgres.rs"]
 mod common_postgres;
+#[path = "common/replay.rs"]
+mod replay;
 
 use common::{
-    json_body, mock_provider, sample_scenario, send_empty, send_empty_with_bearer,
-    send_json, turn_responses,
+    json_body, mock_provider, sample_scenario, send_empty, send_empty_with_bearer, send_json,
+    turn_responses,
 };
 use common_postgres::postgres_test_context_with_config;
 use domain::{FrontendVisibleState, WorldState};
