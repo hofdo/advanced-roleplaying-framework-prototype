@@ -227,6 +227,68 @@ async fn streaming_turn_emits_tokens_metadata_and_final() {
     assert_eq!(final_.world_state_version, 1);
 }
 
+#[tokio::test]
+async fn session_timeline_tracks_public_and_raw_history() {
+    let (store, lock, provider) = build_state();
+
+    let scenario = store
+        .create_scenario(sample_scenario())
+        .await
+        .expect("create scenario");
+    let session = store
+        .create_session(scenario.id, "timeline-smoke".into())
+        .await
+        .expect("create session")
+        .expect("session");
+
+    let provider_arc: Arc<dyn LlmProvider> = provider.clone();
+    let pipeline = Arc::new(DefaultTurnPipeline::with_lock(
+        provider_arc,
+        Arc::clone(&store),
+        lock,
+    ));
+
+    let response = pipeline
+        .process_turn(TurnRequestInput {
+            session_id: session.id,
+            input: "I greet the examiner.".into(),
+            mode: Some(TurnMode::Dialogue),
+            viewer: ViewerContext::player(),
+        })
+        .await
+        .expect("process_turn");
+
+    assert_eq!(response.world_state_version, 1);
+
+    let timeline = store.timeline(session.id).await.expect("public timeline");
+    let kinds = timeline.iter().map(|entry| entry.kind.as_str()).collect::<Vec<_>>();
+    let user_index = kinds
+        .iter()
+        .position(|kind| *kind == "user_message")
+        .expect("user message entry");
+    let assistant_index = kinds
+        .iter()
+        .position(|kind| *kind == "assistant_message")
+        .expect("assistant message entry");
+    let world_event_index = kinds
+        .iter()
+        .position(|kind| *kind == "world_event")
+        .expect("world event entry");
+
+    assert!(user_index < assistant_index);
+    assert!(assistant_index < world_event_index);
+    assert!(timeline[assistant_index].description.contains("examiner"));
+
+    let raw_timeline = store
+        .raw_timeline(session.id)
+        .await
+        .expect("raw timeline query")
+        .expect("raw timeline");
+    assert_eq!(raw_timeline.messages.len(), 2);
+    assert!(raw_timeline.deltas.is_empty());
+    assert!(!raw_timeline.events.is_empty());
+}
+
 #[test]
 fn scenario_validate_reports_valid_and_invalid_files() {
     let valid = TempScenarioFile::write(include_str!("../scenarios/templates/scenario.template.json"));

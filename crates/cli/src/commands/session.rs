@@ -2,7 +2,10 @@ use anyhow::Result;
 use clap::Subcommand;
 use uuid::Uuid;
 
-use crate::{bootstrap::CliState, render::print_json};
+use crate::{
+    bootstrap::CliState,
+    render::{print_json, print_timeline},
+};
 
 #[derive(Subcommand, Debug)]
 pub enum Cmd {
@@ -27,6 +30,13 @@ pub enum Cmd {
         /// Clear the session's provider override, falling back to the default.
         #[arg(long, conflicts_with = "provider_id")]
         clear: bool,
+    },
+    /// Show the ordered timeline for a session.
+    Timeline {
+        session_id: Uuid,
+        /// Print raw/admin timeline data as JSON.
+        #[arg(long)]
+        admin: bool,
     },
 }
 
@@ -64,6 +74,19 @@ pub async fn run(state: CliState, cmd: Cmd) -> Result<()> {
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("session {session_id} not found"))?;
             print_json(&session)
+        }
+        Cmd::Timeline { session_id, admin } => {
+            if admin {
+                let raw_timeline = state
+                    .store
+                    .raw_timeline(session_id)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("session {session_id} not found"))?;
+                print_json(&raw_timeline)
+            } else {
+                let timeline = state.store.timeline(session_id).await?;
+                print_timeline(&timeline)
+            }
         }
     }
 }

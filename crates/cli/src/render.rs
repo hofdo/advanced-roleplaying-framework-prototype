@@ -9,6 +9,7 @@ use engine::{
     stream_turn,
 };
 use futures::StreamExt;
+use persistence::TimelineEntry;
 use providers::LlmProvider;
 use serde::Serialize;
 use uuid::Uuid;
@@ -16,6 +17,13 @@ use uuid::Uuid;
 pub fn print_json<T: Serialize>(value: &T) -> Result<()> {
     let rendered = serde_json::to_string_pretty(value)?;
     println!("{rendered}");
+    Ok(())
+}
+
+pub fn print_timeline(entries: &[TimelineEntry]) -> Result<()> {
+    for line in format_timeline_lines(entries) {
+        println!("{line}");
+    }
     Ok(())
 }
 
@@ -99,4 +107,52 @@ fn write_final_summary(
         }
     }
     Ok(())
+}
+
+fn format_timeline_lines(entries: &[TimelineEntry]) -> Vec<String> {
+    entries
+        .iter()
+        .map(|entry| {
+            let version = entry
+                .world_state_version
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".into());
+            format!("{} {} {}", entry.kind, version, entry.description)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_timeline_lines;
+    use persistence::TimelineEntry;
+    use uuid::Uuid;
+
+    #[test]
+    fn format_timeline_lines_prints_kind_version_and_description() {
+        let entries = vec![
+            TimelineEntry {
+                kind: "user_message".into(),
+                description: "I answer plainly.".into(),
+                message_id: Some(Uuid::new_v4()),
+                event_id: None,
+                world_state_version: None,
+            },
+            TimelineEntry {
+                kind: "world_event".into(),
+                description: "The ledger is updated.".into(),
+                message_id: None,
+                event_id: Some(Uuid::new_v4()),
+                world_state_version: Some(3),
+            },
+        ];
+
+        assert_eq!(
+            format_timeline_lines(&entries),
+            vec![
+                "user_message - I answer plainly.".to_string(),
+                "world_event 3 The ledger is updated.".to_string(),
+            ]
+        );
+    }
 }
