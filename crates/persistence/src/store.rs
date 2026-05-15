@@ -1,10 +1,14 @@
 use async_trait::async_trait;
 use domain::{
     ActionResolution, ClockState, ClueState, Fact, FactSource, FactVisibility, FactionState,
-    InventoryItem, MessageRecord, NpcAvailability, NpcState, PlayerCharacterState, QuestState,
-    QuestStatus, RelationshipState, Scenario, ScenarioId, SessionId, WorldState,
+    InventoryItem, MessageRecord, MessageRole, NpcAvailability, NpcState, PlayerCharacterState,
+    QuestState, QuestStatus, RelationshipState, Scenario, ScenarioId, SessionId, ViewerContext,
+    WorldState,
 };
-use engine::{LoadedTurnState, TurnPipelineError, TurnStateStore, ValidatedWorldStateDelta};
+use engine::{
+    BasicFrontendStateProjector, FrontendStateProjector, LoadedTurnState, TurnPipelineError,
+    TurnStateStore, ValidatedWorldStateDelta,
+};
 use sqlx::Row;
 use std::{collections::HashMap, sync::Mutex};
 use uuid::Uuid;
@@ -146,8 +150,25 @@ impl InMemoryApplicationStore {
             provider_id: None,
         };
         let world_state = initial_world_state(id, &scenario);
+        let intro_message = opening_intro_message(id, &scenario, &world_state);
         inner.sessions.insert(id, session.clone());
         inner.world_states.insert(id, world_state);
+        inner
+            .messages
+            .entry(id)
+            .or_default()
+            .push(intro_message.clone());
+        inner
+            .timeline_entries
+            .entry(id)
+            .or_default()
+            .push(TimelineEntry {
+                kind: "system_message".into(),
+                description: intro_message.content,
+                message_id: Some(intro_message.id),
+                event_id: None,
+                world_state_version: None,
+            });
         Some(session)
     }
 
@@ -393,6 +414,7 @@ impl TurnStateStore for InMemoryApplicationStore {
             .unwrap_or_default()
             .into_iter()
             .rev()
+            .filter(|message| message.role != MessageRole::System)
             .take(6)
             .collect::<Vec<_>>()
             .into_iter()
@@ -635,6 +657,7 @@ impl ApplicationStore for PostgresApplicationStore {
             provider_id: None,
         };
         let world_state = initial_world_state(session.id, &scenario);
+        let intro_message = opening_intro_message(session.id, &scenario, &world_state);
 
         let mut tx = self
             .persistence
@@ -656,6 +679,22 @@ impl ApplicationStore for PostgresApplicationStore {
         .bind(world_state.session_id)
         .bind(sqlx::types::Json(&world_state))
         .bind(world_state.version)
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| TurnPipelineError::Store(error.to_string()))?;
+        sqlx::query(
+            "INSERT INTO messages
+             (id, session_id, role, speaker_id, content, scene_type, prompt_template_version, raw_provider_output)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        )
+        .bind(intro_message.id)
+        .bind(intro_message.session_id)
+        .bind("System")
+        .bind(Option::<String>::None)
+        .bind(&intro_message.content)
+        .bind(Option::<String>::None)
+        .bind(Option::<String>::None)
+        .bind(Option::<sqlx::types::Json<serde_json::Value>>::None)
         .execute(&mut *tx)
         .await
         .map_err(|error| TurnPipelineError::Store(error.to_string()))?;
@@ -1017,6 +1056,80 @@ pub fn initial_world_state(session_id: SessionId, scenario: &Scenario) -> WorldS
     }
 }
 
+fn opening_intro_message(
+    session_id: SessionId,
+    scenario: &Scenario,
+    world_state: &WorldState,
+) -> MessageRecord {
+    MessageRecord {
+        id: Uuid::new_v4(),
+        session_id,
+        role: MessageRole::System,
+        speaker_id: None,
+        content: build_opening_intro(scenario, world_state),
+        scene_type: None,
+        prompt_template_version: None,
+        raw_provider_output: None,
+    }
+}
+
+fn build_opening_intro(scenario: &Scenario, world_state: &WorldState) -> String {
+    let projected =
+        BasicFrontendStateProjector.project(scenario, world_state, &ViewerContext::player());
+    let mut sections = vec![scenario.title.trim().to_string()];
+
+    if !scenario.setting.trim().is_empty() {
+        sections.push(format!("Setting\n{}", scenario.setting.trim()));
+    }
+
+    let mut opening = Vec::new();
+    if let Some(location) = projected.current_location.as_ref() {
+        opening.push(format!("You begin in {}.", location.name));
+    }
+    if let Some(speaker) = projected.active_speaker.as_ref() {
+        opening.push(format!("{} is the first visible voice in the scene.", speaker.name));
+    }
+    if !opening.is_empty() {
+        sections.push(format!("Opening\n{}", opening.join(" ")));
+    }
+
+    let mut situation = Vec::new();
+    if let Some(quest_state) = projected.visible_quests.first() {
+        if let Some(quest) = scenario.quests.iter().find(|quest| quest.id == quest_state.id) {
+            if quest.description.trim().is_empty() {
+                situation.push(format!("Immediate concern: {}.", quest.title));
+            } else {
+                situation.push(format!(
+                    "Immediate concern: {}. {}",
+                    quest.title,
+                    quest.description.trim()
+                ));
+            }
+        }
+    }
+    if let Some(clock) = projected.visible_clocks.first() {
+        situation.push(format!(
+            "Pressure: {} stands at {}/{}.",
+            clock.title, clock.current, clock.max
+        ));
+    }
+    if let Some(goal) = projected.player.goals.first() {
+        situation.push(format!("Your focus: {}.", goal.label));
+    } else if let Some(condition) = projected.player.conditions.first() {
+        situation.push(format!("You are carrying {}.", condition.label));
+    } else if let Some(resource) = projected.player.resources.first() {
+        situation.push(format!(
+            "{} currently sits at {} within a range of {} to {}.",
+            resource.label, resource.current, resource.min, resource.max
+        ));
+    }
+    if !situation.is_empty() {
+        sections.push(format!("Situation\n{}", situation.join(" ")));
+    }
+
+    sections.join("\n\n")
+}
+
 fn derive_npc_availability(
     status: domain::NpcStatus,
     visible_to_player: bool,
@@ -1228,17 +1341,81 @@ mod tests {
             .await
             .expect("timeline should load");
 
-        assert_eq!(timeline.len(), 3);
-        assert_eq!(timeline[0].kind, "user_message");
-        assert_eq!(timeline[0].description, user_message.content);
-        assert_eq!(timeline[1].kind, "assistant_message");
-        assert_eq!(timeline[1].description, assistant_message.content);
-        assert_eq!(timeline[1].world_state_version, Some(1));
-        assert_eq!(timeline[2].kind, "world_event");
+        assert_eq!(timeline.len(), 4);
+        assert_eq!(timeline[0].kind, "system_message");
+        assert_eq!(timeline[1].kind, "user_message");
+        assert_eq!(timeline[1].description, user_message.content);
+        assert_eq!(timeline[2].kind, "assistant_message");
+        assert_eq!(timeline[2].description, assistant_message.content);
+        assert_eq!(timeline[2].world_state_version, Some(1));
+        assert_eq!(timeline[3].kind, "world_event");
         assert_eq!(
-            timeline[2].description,
+            timeline[3].description,
             "The gates grind open behind the player."
         );
-        assert_eq!(timeline[2].world_state_version, Some(1));
+        assert_eq!(timeline[3].world_state_version, Some(1));
+    }
+
+    #[tokio::test]
+    async fn create_session_persists_opening_system_message_before_turns() {
+        let store = super::InMemoryApplicationStore::new(true);
+        let scenario = scenario();
+        let scenario_id = scenario.id;
+        store.insert_scenario(scenario);
+
+        let session = super::ApplicationStore::create_session(
+            &store,
+            scenario_id,
+            "Intro Session".into(),
+        )
+            .await
+            .expect("create session")
+            .expect("session should exist");
+
+        let timeline = super::ApplicationStore::timeline(&store, session.id)
+            .await
+            .expect("timeline should load");
+        assert_eq!(timeline.len(), 1);
+        assert_eq!(timeline[0].kind, "system_message");
+        assert_eq!(timeline[0].world_state_version, None);
+
+        let raw_timeline = super::ApplicationStore::raw_timeline(&store, session.id)
+            .await
+            .expect("raw timeline query")
+            .expect("raw timeline should exist");
+        assert_eq!(raw_timeline.messages.len(), 1);
+        assert_eq!(raw_timeline.messages[0].role, MessageRole::System);
+        assert!(raw_timeline.messages[0].scene_type.is_none());
+        assert!(raw_timeline.messages[0].raw_provider_output.is_none());
+    }
+
+    #[tokio::test]
+    async fn opening_system_message_is_excluded_from_recent_prompt_messages() {
+        let store = super::InMemoryApplicationStore::new(true);
+        let scenario = scenario();
+        let scenario_id = scenario.id;
+        store.insert_scenario(scenario);
+
+        let session = super::ApplicationStore::create_session(
+            &store,
+            scenario_id,
+            "Prompt Filter".into(),
+        )
+            .await
+            .expect("create session")
+            .expect("session should exist");
+
+        let loaded = TurnStateStore::load_turn_state(&store, session.id)
+            .await
+            .expect("turn state should load");
+
+        assert!(loaded.recent_messages.is_empty());
+
+        let raw_timeline = super::ApplicationStore::raw_timeline(&store, session.id)
+            .await
+            .expect("raw timeline query")
+            .expect("raw timeline should exist");
+        assert_eq!(raw_timeline.messages.len(), 1);
+        assert_eq!(raw_timeline.messages[0].role, MessageRole::System);
     }
 }

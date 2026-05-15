@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::{
     bootstrap::CliState,
-    render::{print_json, render_streaming_turn},
+    render::{OutputView, print_json, print_narrative, print_turn_response, render_streaming_turn},
     samples::{build_sample, sample_names},
     scenario_io::read_scenario_file,
 };
@@ -39,6 +39,9 @@ pub struct Args {
     /// Start in admin viewer mode (sees GM-only facts).
     #[arg(long)]
     pub admin: bool,
+    /// Terminal rendering style for turn output.
+    #[arg(long, value_enum, default_value_t = OutputView::Verbose)]
+    pub view: OutputView,
 }
 
 struct ChatState {
@@ -48,6 +51,7 @@ struct ChatState {
     mode: Option<TurnMode>,
     stream: bool,
     admin: bool,
+    view: OutputView,
 }
 
 impl ChatState {
@@ -86,6 +90,7 @@ pub(crate) enum SlashCmd {
     Mode(Option<TurnMode>),
     Stream(bool),
     Admin(bool),
+    View(OutputView),
     Unknown(String),
     Empty,
 }
@@ -128,6 +133,11 @@ pub(crate) fn parse_slash(line: &str) -> Option<SlashCmd> {
             Some("on") => SlashCmd::Admin(true),
             Some("off") => SlashCmd::Admin(false),
             _ => SlashCmd::Unknown("usage: /admin on|off".into()),
+        },
+        "view" => match rest.first().copied() {
+            Some("verbose") => SlashCmd::View(OutputView::Verbose),
+            Some("quiet") => SlashCmd::View(OutputView::Quiet),
+            _ => SlashCmd::Unknown("usage: /view verbose|quiet".into()),
         },
         other => SlashCmd::Unknown(format!("unknown slash command: /{other}. Try /help.")),
     })
@@ -214,6 +224,7 @@ chat commands (prefix with /):
   /mode <action|dialogue|direct|remember|auto>
   /stream <on|off>                 Toggle streaming output (default on)
   /admin <on|off>                  Toggle admin viewer
+  /view <verbose|quiet>            Toggle terminal presentation
 plain text submits a turn against the active session.";
 
 /// Source of input lines. Production uses a rustyline wrapper; tests use a
@@ -312,6 +323,7 @@ pub(crate) async fn run_with_source<L: LineSource>(
         mode,
         stream: true,
         admin: args.admin,
+        view: args.view,
     };
 
     // Initial state from startup flags.
@@ -330,6 +342,7 @@ pub(crate) async fn run_with_source<L: LineSource>(
             "loaded sample scenario {} (session {})",
             scenario.id, session.id
         );
+        print_session_intro(&chat, session.id).await?;
     } else if let Some(scenario_id) = args.scenario {
         let scenario = chat
             .cli
@@ -348,6 +361,7 @@ pub(crate) async fn run_with_source<L: LineSource>(
             })?;
         chat.active_session = Some(session.id);
         println!("active scenario {} (session {})", scenario.id, session.id);
+        print_session_intro(&chat, session.id).await?;
     } else if let Some(session_id) = args.session {
         let session = chat
             .cli
@@ -461,6 +475,9 @@ async fn handle_slash(chat: &mut ChatState, cmd: SlashCmd) -> ControlFlow {
                 Ok(Some(session)) => {
                     chat.active_session = Some(session.id);
                     println!("active session {}", session.id);
+                    if let Err(e) = print_session_intro(chat, session.id).await {
+                        return ControlFlow::Error(e);
+                    }
                 }
                 Ok(None) => println!("scenario {scenario_id} not found."),
                 Err(e) => return ControlFlow::Error(e.into()),
@@ -530,6 +547,10 @@ async fn handle_slash(chat: &mut ChatState, cmd: SlashCmd) -> ControlFlow {
         SlashCmd::Admin(on) => {
             chat.admin = on;
             println!("admin {}", if on { "on" } else { "off" });
+        }
+        SlashCmd::View(view) => {
+            chat.view = view;
+            println!("view {}", view_name(view));
         }
         SlashCmd::Unknown(msg) => println!("{msg}"),
     }
@@ -609,7 +630,8 @@ async fn handle_turn(chat: &mut ChatState, input: String) -> Result<()> {
     let mode = chat.mode;
 
     if chat.stream {
-        let turn_future = render_streaming_turn(pipeline, session_id, input, mode, viewer);
+        let turn_future =
+            render_streaming_turn(pipeline, session_id, input, mode, viewer, chat.view);
         tokio::pin!(turn_future);
         tokio::select! {
             result = &mut turn_future => result?,
@@ -627,43 +649,67 @@ async fn handle_turn(chat: &mut ChatState, input: String) -> Result<()> {
                 viewer,
             })
             .await?;
-        print_json(&serde_json::json!({
-            "message_id": response.message_id,
-            "player_response": response.player_response,
-            "scene_type": response.scene_type,
-            "world_state_version": response.world_state_version,
-            "changed_entities": response.changed_entities,
-            "frontend_state_patch": response.frontend_state_patch,
-        }))?;
+        print_turn_response(&response, chat.view)?;
     }
     Ok(())
 }
 
 fn print_status(chat: &ChatState) {
-    println!(
-        "scenario: {}",
-        chat.active_scenario
-            .map(|id| id.to_string())
-            .unwrap_or_else(|| "(none)".into())
-    );
-    println!(
-        "session:  {}",
-        chat.active_session
-            .map(|id| id.to_string())
-            .unwrap_or_else(|| "(none)".into())
-    );
-    println!(
-        "mode:     {}",
-        match chat.mode {
-            None => "auto",
-            Some(TurnMode::Action) => "action",
-            Some(TurnMode::Dialogue) => "dialogue",
-            Some(TurnMode::Direct) => "direct",
-            Some(TurnMode::Remember) => "remember",
-        }
-    );
-    println!("stream:   {}", if chat.stream { "on" } else { "off" });
-    println!("admin:    {}", if chat.admin { "on" } else { "off" });
+    for line in format_status(chat) {
+        println!("{line}");
+    }
+}
+
+fn format_status(chat: &ChatState) -> Vec<String> {
+    vec![
+        format!(
+            "scenario: {}",
+            chat.active_scenario
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "(none)".into())
+        ),
+        format!(
+            "session:  {}",
+            chat.active_session
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "(none)".into())
+        ),
+        format!("mode:     {}", mode_name(chat.mode)),
+        format!("stream:   {}", if chat.stream { "on" } else { "off" }),
+        format!("admin:    {}", if chat.admin { "on" } else { "off" }),
+        format!("view:     {}", view_name(chat.view)),
+    ]
+}
+
+async fn print_session_intro(chat: &ChatState, session_id: SessionId) -> Result<()> {
+    let Some(raw_timeline) = chat.cli.store.raw_timeline(session_id).await? else {
+        return Ok(());
+    };
+    if let Some(message) = raw_timeline
+        .messages
+        .iter()
+        .find(|message| message.role == domain::MessageRole::System)
+    {
+        print_narrative(&message.content)?;
+    }
+    Ok(())
+}
+
+fn mode_name(mode: Option<TurnMode>) -> &'static str {
+    match mode {
+        None => "auto",
+        Some(TurnMode::Action) => "action",
+        Some(TurnMode::Dialogue) => "dialogue",
+        Some(TurnMode::Direct) => "direct",
+        Some(TurnMode::Remember) => "remember",
+    }
+}
+
+fn view_name(view: OutputView) -> &'static str {
+    match view {
+        OutputView::Verbose => "verbose",
+        OutputView::Quiet => "quiet",
+    }
 }
 
 fn build_prompt(chat: &ChatState) -> String {
@@ -770,6 +816,34 @@ mod tests {
     }
 
     #[test]
+    fn parses_view_toggles() {
+        assert_eq!(
+            parse_slash("/view quiet"),
+            Some(SlashCmd::View(OutputView::Quiet))
+        );
+        assert_eq!(
+            parse_slash("/view verbose"),
+            Some(SlashCmd::View(OutputView::Verbose))
+        );
+        assert!(matches!(parse_slash("/view loud"), Some(SlashCmd::Unknown(_))));
+    }
+
+    #[test]
+    fn status_reports_active_view() {
+        let state = ChatState {
+            cli: build_test_state(Arc::new(MockProvider::new("mock", Vec::<String>::new()))),
+            active_scenario: None,
+            active_session: None,
+            mode: None,
+            stream: true,
+            admin: false,
+            view: OutputView::Quiet,
+        };
+
+        assert!(format_status(&state).iter().any(|line| line == "view:     quiet"));
+    }
+
+    #[test]
     fn parses_uuid_arguments() {
         let id = Uuid::new_v4();
         assert_eq!(
@@ -856,6 +930,7 @@ mod tests {
                 sample: None,
                 mode: None,
                 admin: false,
+                view: OutputView::Verbose,
             },
             &mut script,
         )
@@ -884,6 +959,7 @@ mod tests {
                 sample: Some("chosen-beyond-goddess".into()),
                 mode: None,
                 admin: false,
+                view: OutputView::Verbose,
             },
             &mut script,
         )
@@ -906,6 +982,7 @@ mod tests {
                 sample: None,
                 mode: None,
                 admin: false,
+                view: OutputView::Verbose,
             },
             &mut script,
         )

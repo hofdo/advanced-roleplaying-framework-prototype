@@ -510,6 +510,57 @@ async fn raw_timeline_includes_messages_deltas_events() {
     assert!(!raw_timeline.events.is_empty());
 }
 
+#[tokio::test]
+#[ignore = "requires Docker-backed Postgres integration"]
+async fn application_store_create_session_persists_opening_system_message() {
+    let (p, _container) = setup().await;
+
+    let scenario = sample_scenario();
+    let scenario_id = scenario.id;
+    ScenarioRepository::create(&p, scenario).await.unwrap();
+
+    let store = PostgresApplicationStore::new(p.clone(), true);
+    let session = ApplicationStore::create_session(&store, scenario_id, "Intro Session".into())
+        .await
+        .unwrap()
+        .expect("session should exist");
+
+    let timeline = ApplicationStore::timeline(&store, session.id).await.unwrap();
+    assert_eq!(timeline.len(), 1);
+    assert_eq!(timeline[0].kind, "system_message");
+    assert_eq!(timeline[0].world_state_version, None);
+
+    let raw_timeline = ApplicationStore::raw_timeline(&store, session.id)
+        .await
+        .unwrap()
+        .expect("raw timeline should exist");
+    assert_eq!(raw_timeline.messages.len(), 1);
+    assert_eq!(raw_timeline.messages[0].role, MessageRole::System);
+    assert!(raw_timeline.messages[0].scene_type.is_none());
+    assert!(raw_timeline.messages[0].raw_provider_output.is_none());
+}
+
+#[tokio::test]
+#[ignore = "requires Docker-backed Postgres integration"]
+async fn load_turn_state_excludes_opening_system_message_from_recent_messages() {
+    let (p, _container) = setup().await;
+
+    let scenario = sample_scenario();
+    let scenario_id = scenario.id;
+    ScenarioRepository::create(&p, scenario).await.unwrap();
+
+    let store = PostgresApplicationStore::new(p.clone(), true);
+    let session = ApplicationStore::create_session(&store, scenario_id, "Prompt Filter".into())
+        .await
+        .unwrap()
+        .expect("session should exist");
+
+    let loaded = TurnStateStore::load_turn_state(&store, session.id)
+        .await
+        .expect("turn state should load");
+    assert!(loaded.recent_messages.is_empty());
+}
+
 // ===========================================================================
 // 6.5  EventRepository — 2 tests
 // ===========================================================================

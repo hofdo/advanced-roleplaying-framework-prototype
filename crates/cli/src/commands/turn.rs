@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::{
     bootstrap::CliState,
-    render::{print_json, render_streaming_turn},
+    render::{print_turn_response, render_streaming_turn},
 };
 
 #[derive(ClapArgs, Debug)]
@@ -26,6 +26,9 @@ pub struct Args {
     /// Use admin viewer context (sees GM-only facts in projections).
     #[arg(long)]
     pub admin: bool,
+    /// Terminal rendering style for turn output.
+    #[arg(long, value_enum, default_value_t = crate::render::OutputView::Verbose)]
+    pub view: crate::render::OutputView,
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -65,18 +68,19 @@ pub async fn run(state: CliState, args: Args) -> Result<()> {
             Arc::clone(&state.store),
             state.turn_lock.clone(),
         ));
-        render_streaming_turn(pipeline, args.session_id, args.input, mode, viewer).await
+        render_streaming_turn(
+            pipeline,
+            args.session_id,
+            args.input,
+            mode,
+            viewer,
+            args.view,
+        )
+        .await
     } else {
         let response =
             process_non_streaming_turn(&state, args.session_id, args.input, mode, viewer).await?;
-        print_json(&serde_json::json!({
-            "message_id": response.message_id,
-            "player_response": response.player_response,
-            "scene_type": response.scene_type,
-            "world_state_version": response.world_state_version,
-            "changed_entities": response.changed_entities,
-            "frontend_state_patch": response.frontend_state_patch,
-        }))
+        print_turn_response(&response, args.view)
     }
 }
 

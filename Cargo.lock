@@ -584,6 +584,7 @@ dependencies = [
  "futures",
  "persistence",
  "providers",
+ "reqwest",
  "rustyline",
  "serde",
  "serde_json",

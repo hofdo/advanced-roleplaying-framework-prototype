@@ -86,6 +86,10 @@ pub async fn build_state(opts: CliRuntimeOptions) -> Result<CliState> {
     } else {
         StorageBackend::Memory
     };
+    build_state_from_config(config).await
+}
+
+pub async fn build_state_from_config(config: AppConfig) -> Result<CliState> {
     config.validate()?;
     let provider = build_provider_from_config(&config.provider.default)?;
 

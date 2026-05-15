@@ -484,9 +484,17 @@ impl TurnStateStore for PgPersistence {
             .await
             .map_err(repo_to_pipeline)?
             .ok_or(TurnPipelineError::NotFound)?;
-        let recent_messages = <Self as MessageRepository>::recent(self, session_id, 6)
+        let recent_messages = <Self as MessageRepository>::list(self, session_id)
             .await
-            .map_err(repo_to_pipeline)?;
+            .map_err(repo_to_pipeline)?
+            .into_iter()
+            .filter(|message| message.role != MessageRole::System)
+            .rev()
+            .take(6)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
 
         Ok(LoadedTurnState {
             scenario,

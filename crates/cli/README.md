@@ -12,6 +12,7 @@ It should stay thin. It should not host its own engine logic, not own its own pr
 - `src/bootstrap.rs` builds `CliState` (`store`, `provider`, `turn_lock`) from `AppConfig`. Defaults to the in-memory store; `--postgres` opts into the persistent backend.
 - `src/commands/scenario.rs` — create / list / get / delete / validate / inspect scenarios, plus sample and template helpers.
 - `src/commands/session.rs` — create / list / get sessions, inspect timelines, inspect provider bindings, and export replay fixtures.
+- `src/commands/dev.rs` — convenience launchers for local llama.cpp and OpenRouter-backed chat sessions.
 - `src/commands/turn.rs` — submit a blocking turn or stream narration tokens live.
 - `src/commands/world.rs` — show player-projected state or, with `--admin`, the raw `WorldState`.
 - `src/commands/provider.rs` — Postgres-only: register, list, remove, probe, inspect status, and test registered LLM providers.
@@ -55,12 +56,25 @@ For streaming, the CLI consumes `engine::stream_turn` directly. The same functio
 
 ```bash
 cargo run -p cli -- chat --sample chosen-beyond-goddess
+cargo run -p cli -- chat --sample chosen-beyond-goddess --view quiet
 ```
 
 Inside the REPL, plain text becomes a turn. Lines starting with `/` are slash-commands:
 
 ```
 loaded sample scenario abc-123 (session def-456)
+Chosen Beyond the Goddess
+
+Setting
+A high fantasy isekai world of sword and magic.
+
+Opening
+You begin in Guildhall. Guild Examiner is the first visible voice in the scene.
+
+Situation
+Immediate concern: Register at the Guild. Complete the registration process.
+Pressure: The player's fame spreads stands at 1/6.
+
 type /help for commands, /exit to quit.
 rp> /status
 scenario: abc-123
@@ -68,6 +82,7 @@ session:  def-456
 mode:     auto
 stream:   on
 admin:    off
+view:     verbose
 rp> The examiner steps forward and asks me to declare my mage rank.
 [tokens stream live ...]
 ---
@@ -106,8 +121,9 @@ The prompt is `rp> ` normally and `rp!> ` while admin is on. `?` instead of `>` 
 | `/mode <action\|dialogue\|direct\|remember\|auto>` | Set turn mode for plain-text turns |
 | `/stream <on\|off>` | Toggle live token streaming |
 | `/admin <on\|off>` | Toggle admin viewer for turns and `/world` |
+| `/view <verbose\|quiet>` | Toggle terminal presentation style |
 
-Plain text (any line not starting with `/`) is submitted as a turn against the active session. Streaming is on by default; tokens render live and a `---` separator precedes the `world_state_version` / `changed_entities` / `usage` summary.
+Plain text (any line not starting with `/`) is submitted as a turn against the active session. Streaming is on by default. `verbose` preserves the current metadata-heavy output. `quiet` renders only the player-facing text plus the persisted opening intro for new sessions.
 
 Line history is persisted to `~/.config/rp/history`. `Ctrl+C` cancels an in-flight turn (releases the session lock immediately). `Ctrl+D` exits cleanly.
 
@@ -137,11 +153,31 @@ export DATABASE_URL=postgres://roleplay:roleplay@localhost:5432/roleplay
 cargo run -p cli -- --postgres scenario create --sample chosen-beyond-goddess
 cargo run -p cli -- --postgres session create --scenario <SCENARIO_ID> --title smoke
 cargo run -p cli -- --postgres turn <SESSION_ID> --input "I greet the examiner." --stream
+cargo run -p cli -- --postgres turn <SESSION_ID> --input "I greet the examiner." --view quiet
 cargo run -p cli -- --postgres world <SESSION_ID>
 cargo run -p cli -- --postgres world <SESSION_ID> --admin
 ```
 
 `--postgres` can also be enabled by `ROLEPLAY_CLI_POSTGRES=1`.
+
+### Dev launchers
+
+The `dev` command starts the durable backend and opens the interactive REPL with a preset provider config:
+
+```bash
+cargo run -p cli -- dev local
+cargo run -p cli -- dev open-router
+cargo run -p cli -- dev local --destroy
+cargo run -p cli -- dev local --scenario <SCENARIO_ID>
+cargo run -p cli -- dev open-router --scenario <SCENARIO_ID>
+cargo run -p cli -- dev local --view quiet
+```
+
+`dev local` starts `docker compose up -d postgres`, launches `scripts/start-llm.sh`, waits for the local llama-server health checks, and then opens chat on `chosen-beyond-goddess` unless `--sample NAME` or `--scenario UUID` is supplied.
+
+`dev open-router` starts the same Postgres backend, configures the OpenRouter provider preset, and then opens chat on `chosen-beyond-goddess` unless `--sample NAME` or `--scenario UUID` is supplied. Set `OPENROUTER_API_KEY` before running it.
+
+Add `--destroy` to either launcher if you want it to run `docker compose down` for the owned Postgres stack on exit instead of just stopping it.
 
 ### LLM provider
 
@@ -161,26 +197,29 @@ export LLM_MODEL=openai/gpt-4o-mini
 export LLM_API_KEY=env:OPENROUTER_API_KEY
 export OPENROUTER_API_KEY=sk-or-...
 cargo run -p cli -- turn <SESSION_ID> --input "describe the room" --stream
+cargo run -p cli -- turn <SESSION_ID> --input "describe the room" --view quiet
 ```
 
 ### Subcommand reference
 
 | Command | Description |
 |---|---|
-| `chat [--session UUID \| --scenario UUID \| --sample NAME] [--mode MODE] [--admin]` | Interactive REPL (see Chat mode section above) |
+| `chat [--session UUID \| --scenario UUID \| --sample NAME] [--mode MODE] [--admin] [--view verbose\|quiet]` | Interactive REPL (see Chat mode section above) |
+| `dev local [--sample NAME \| --scenario UUID] [--destroy] [--view verbose\|quiet]` | Start Postgres, launch the local llama.cpp stack, and open chat on the default sample or a specific scenario |
+| `dev open-router [--sample NAME \| --scenario UUID] [--destroy] [--view verbose\|quiet]` | Start Postgres, configure OpenRouter, and open chat on the default sample or a specific scenario |
 | `scenario create [--file PATH \| --sample NAME]` | Create from validated JSON on disk or a built-in sample |
 | `scenario list / get <ID> / delete <ID> / validate [--file PATH \| --sample NAME] / inspect <ID> / samples / template` | Scenario management, validation, inspection, sample listing, and template export |
 | `session create --scenario <ID> [--title TEXT]` | Start a session for an existing scenario |
 | `session list / get <ID> / timeline <ID> / provider <ID> / export-fixture <ID>` | Enumerate sessions, inspect timeline/provider state, or export replay fixtures |
 | `session set-provider <ID> [--provider-id UUID \| --clear]` | Pin a session to a registered provider, or fall back to the default |
-| `turn <SESSION_ID> --input TEXT [--mode action\|dialogue\|direct\|remember] [--stream] [--admin]` | Submit a turn; `--stream` renders tokens live, `--admin` enables GM-only visibility |
+| `turn <SESSION_ID> --input TEXT [--mode action\|dialogue\|direct\|remember] [--stream] [--admin] [--view verbose\|quiet]` | Submit a turn; `--stream` renders tokens live, `--admin` enables GM-only visibility |
 | `world <SESSION_ID> [--admin]` | Print projected (player-safe) state; `--admin` returns the raw `WorldState` |
 | `provider register --file PATH` | Postgres only: persist a `ProviderConfig` |
 | `provider list / remove <ID> / models <ID> / status <ID> / test` | Postgres only: enumerate the registry, remove an entry, inspect status, test connectivity, or list models a provider exposes |
 
 ### Output
 
-JSON-producing commands print pretty-printed JSON to stdout. Streaming turns write tokens to stdout as they arrive and finish with a `---` separator followed by `world_state_version`, `changed_entities`, and (when the provider reports them) `usage` and `cost_usd`. Errors go to stderr with a non-zero exit code; the CLI never panics on a provider or store failure.
+JSON-producing commands print pretty-printed JSON to stdout. In `verbose` view, streaming turns write tokens to stdout as they arrive and finish with a `---` separator followed by `world_state_version`, `changed_entities`, and (when the provider reports them) `usage` and `cost_usd`. In `quiet` view, turns print only the player-facing text. Every newly created session also persists a player-facing opening intro as the first `system_message`; chat and dev commands print that intro immediately when they create the session, and timeline/history commands show it later without changing the `session create` JSON payload.
 
 Logs follow the `RP_LOG` env var (defaults to `warn`) and are routed to stderr so they don't contaminate stdout JSON.
 

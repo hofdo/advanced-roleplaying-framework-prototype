@@ -340,6 +340,7 @@ async fn session_timeline_tracks_public_and_raw_history() {
         .position(|kind| *kind == "world_event")
         .expect("world event entry");
 
+    assert_eq!(timeline[0].kind, "system_message");
     assert!(user_index < assistant_index);
     assert!(assistant_index < world_event_index);
     assert!(timeline[assistant_index].description.contains("examiner"));
@@ -349,7 +350,8 @@ async fn session_timeline_tracks_public_and_raw_history() {
         .await
         .expect("raw timeline query")
         .expect("raw timeline");
-    assert_eq!(raw_timeline.messages.len(), 2);
+    assert_eq!(raw_timeline.messages.len(), 3);
+    assert_eq!(raw_timeline.messages[0].role, domain::MessageRole::System);
     assert!(raw_timeline.deltas.is_empty());
     assert!(!raw_timeline.events.is_empty());
 }
