@@ -12,7 +12,7 @@ The rest of the engine should not need to know the HTTP details of OpenAI-compat
 - `openai_compatible.rs` implements generic OpenAI-compatible chat completion calls.
 - `llama_cpp.rs` implements local `llama-server` integration, health checks, props checks, and control-token filtering.
 - `openrouter.rs` implements OpenRouter-specific routing, attribution headers, model listing, usage, cost, and generation metadata.
-- `mock.rs` provides deterministic provider behavior for tests.
+- `mock.rs` provides deterministic provider behavior for tests, including a recording wrapper used by prompt-shape assertions when the test-fixtures feature is enabled.
 - `http.rs` contains shared retry, reqwest error mapping, and buffered SSE decoding.
 - `secrets.rs` resolves plain and `env:` API key references.
 - `tests/` uses WireMock and unit tests to verify provider behavior.
@@ -42,6 +42,7 @@ The API and engine collect that metadata without storing per-request stream stat
 - Do not persist provider config here; persistence stores records and API composition builds providers from them.
 - Secret resolution should fail loudly for unresolved `env:` references so invalid providers are not silently accepted.
 - Streaming parsers must tolerate real HTTP chunk boundaries; network chunks are not guaranteed to align with SSE lines.
+- Test-only recording providers should remain behind `#[cfg(any(test, feature = "test-fixtures"))]` so production builds stay lean.
 
 ## Useful Commands
 

@@ -16,20 +16,21 @@ The repository currently implements a working backend architecture with:
 - typed `WorldStateDelta` mutations
 - deterministic validation and reduction of LLM-proposed changes
 - frontend-safe state projection
+- action resolution, player character state, clue, relationship, faction pressure, and NPC agency systems
 - PostgreSQL persistence plus in-memory mode
 - provider registration and session-scoped provider selection
 - hidden-reasoning stripping
 - structured-output repair and provider retry support
 - admin/debug routes for raw state inspection
-- unit, in-memory integration, provider, and Docker-gated PostgreSQL tests
+- unit, in-memory integration, provider, behavioral fixture, and Docker-gated PostgreSQL tests
 
-The current priority is **hardening correctness and secrecy boundaries**, not expanding gameplay features.
+The current priority is keeping the docs and tests aligned with the implemented gameplay systems while hardening correctness and secrecy boundaries.
 
-### Known Limitations
+### Current Boundaries
 
-**Secrecy boundary is split before state mutation**
+**Visible narration and oracle extraction are split**
 
-Streaming and non-streaming turns generate player-visible narration from a narration-safe context. Structured delta extraction runs afterward with oracle context so hidden facts can affect state validation without being passed to player-visible narration. Secret-leak validation in the engine remains a second layer of defense.
+Streaming and non-streaming turns generate player-visible narration from a narration-safe context first. Structured delta extraction runs afterward with oracle context so hidden facts can affect state validation without being passed to player-visible narration. Secret-leak validation in the engine remains a second layer of defense.
 
 **Turn locking depends on storage mode**
 
@@ -278,14 +279,14 @@ Subcommands:
 |---|---|
 | `chat [--sample NAME \| --scenario UUID \| --session UUID]` | Interactive REPL: plain text → turn, `/`-prefixed → command |
 | `scenario create [--file PATH \| --sample NAME]` | Create from JSON or a built-in sample |
-| `scenario list / get / delete` | Standard scenario management |
+| `scenario list / get / delete / validate / inspect / samples / template` | Standard scenario management, validation, inspection, sample listing, and template export |
 | `session create --scenario <ID>` | Start a new session |
-| `session list / get` | Enumerate / inspect sessions |
+| `session list / get / timeline / provider / export-fixture` | Enumerate sessions, inspect timelines, inspect provider bindings, or export replay fixtures |
 | `session set-provider <ID> [--provider-id UUID \| --clear]` | Pin a session to a registered provider |
 | `turn <SESSION_ID> --input "..." [--mode action\|dialogue\|direct\|remember] [--stream] [--admin]` | Submit a turn |
 | `world <SESSION_ID> [--admin]` | Show projected (or raw) world state |
 | `provider register --file PATH` | Postgres only: persist a `ProviderConfig` |
-| `provider list / remove / models` | Postgres only: enumerate / clean up registry |
+| `provider list / remove / models / status / test` | Postgres only: enumerate the registry, clean it up, inspect readiness, or run provider checks |
 
 Streaming turns render tokens as they arrive and print a final block with `world_state_version`, `changed_entities`, and (when the provider reports it) usage + cost.
 
@@ -307,6 +308,7 @@ Streaming turns render tokens as they arrive and print a final block with `world
 | `POST` | `/scenarios` | Create a scenario |
 | `GET` | `/scenarios` | List scenarios |
 | `GET` | `/scenarios/:id` | Get a scenario |
+| `PUT` | `/scenarios/:id` | Update a scenario |
 | `DELETE` | `/scenarios/:id` | Delete a scenario |
 
 ### Sessions
@@ -317,6 +319,7 @@ Streaming turns render tokens as they arrive and print a final block with `world
 | `GET` | `/sessions/:id` | Get a session |
 | `DELETE` | `/sessions/:id` | Delete a session |
 | `PATCH` | `/sessions/:id/provider` | Assign a registered provider to the session |
+| `GET` | `/sessions/:id/timeline` | Get public timeline entries |
 | `GET` | `/sessions/:id/world-state` | Get frontend-safe projected state |
 | `GET` | `/sessions/:id/export` | Export frontend-visible session state |
 | `GET` | `/sessions/:id/events` | List session events |
@@ -333,6 +336,7 @@ Streaming turns render tokens as they arrive and print a final block with `world
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/providers` | Register a provider configuration |
+| `POST` | `/providers/test` | Run health and readiness checks for the configured provider |
 | `GET` | `/providers` | List registered providers |
 | `DELETE` | `/providers/:id` | Remove a provider |
 | `GET` | `/providers/:id/models` | List models available from a registered provider |
@@ -344,6 +348,7 @@ Streaming turns render tokens as they arrive and print a final block with `world
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/admin/sessions/:id/export/raw` | Full unfiltered world state |
+| `GET` | `/admin/sessions/:id/timeline/raw` | Raw timeline data |
 | `POST` | `/admin/sessions/:id/turn/debug` | Turn response including applied delta |
 
 Admin routes expose internal state and must remain protected or disabled outside local/debug use.
@@ -355,12 +360,15 @@ Admin routes expose internal state and must remain protected or disabled outside
 The engine maintains authoritative state such as:
 
 - facts with visibility levels
-- NPC runtime state
-- factions and standing
+- NPC runtime state, availability, and offscreen actions
+- factions, standing, and pressure
 - quests
 - clocks
-- relationships
+- relationships with trust, suspicion, and loyalty
 - inventory
+- action resolutions
+- player character state
+- clues and clue discovery state
 - recent public events
 
 ### Typed Mutations
@@ -368,6 +376,7 @@ The engine maintains authoritative state such as:
 LLM output is constrained to known change types through `WorldStateDelta`, including:
 
 - facts to add
+- action resolution changes
 - NPC changes
 - faction changes
 - quest changes
@@ -375,7 +384,10 @@ LLM output is constrained to known change types through `WorldStateDelta`, inclu
 - relationship changes
 - location changes
 - inventory changes
+- player changes
+- clue changes
 - scene and summary updates
+- memory changes
 
 The engine validates every proposed mutation before applying it.
 
@@ -386,6 +398,9 @@ Normal player-facing projection removes or filters:
 - GM-only facts
 - hidden clocks
 - hidden NPCs
+- hidden action resolutions
+- hidden clues
+- hidden player GM notes
 - raw provider output
 - internal debug state
 
@@ -428,6 +443,12 @@ cargo test --workspace
 cargo test -p api --test memory_api_flows
 ```
 
+### Behavioral API tests
+
+```bash
+cargo test -p api --test behavioral_fixtures -- --ignored --test-threads=1
+```
+
 ### Provider tests
 
 ```bash
@@ -437,13 +458,13 @@ cargo test -p providers
 ### Docker-gated PostgreSQL API tests
 
 ```bash
-cargo test -p api --test postgres_api_flows -- --ignored
+cargo test -p api --test postgres_api_flows -- --ignored --test-threads=1
 ```
 
 ### Docker-gated persistence tests
 
 ```bash
-cargo test -p persistence --test repository_tests -- --ignored
+cargo test -p persistence --test repository_tests -- --ignored --test-threads=1
 ```
 
 ### Live local stack smoke test
@@ -504,17 +525,18 @@ The wrapper fails fast if `llama-server` is missing, Docker is unavailable, the 
 
 ```bash
 cargo test --workspace && \
-cargo test -p api --test postgres_api_flows -- --ignored && \
-cargo test -p persistence --test repository_tests -- --ignored
+cargo test -p api --test postgres_api_flows -- --ignored --test-threads=1 && \
+cargo test -p api --test behavioral_fixtures -- --ignored --test-threads=1 && \
+cargo test -p persistence --test repository_tests -- --ignored --test-threads=1
 ```
 
 ## Current Engineering Priorities
 
-1. Split the non-streaming visible-response path from oracle/delta reasoning so player-visible generation never receives GM-only facts.
-2. Continue strengthening reveal validation from proof-presence checks toward stronger proof/condition matching.
+1. Keep the docs and plan index synchronized with the implemented gameplay, feature, and architecture state.
+2. Fill the remaining named behavioral fixture gaps and keep replay export coverage aligned with the current sample set.
 3. Keep prompt construction DRY as narration-safe and oracle contexts evolve.
 4. Expand integration coverage around turn locking, provider selection, and secret-handling behavior.
-5. Keep the engine focused on safety and correctness before adding larger gameplay systems.
+5. Continue tightening reveal validation and other safety rules around typed deltas.
 
 ## Not in Scope Yet
 

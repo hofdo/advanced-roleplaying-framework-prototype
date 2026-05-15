@@ -12,7 +12,7 @@ It should orchestrate requests. It should not become the place where core world-
 - `src/app.rs` defines routes, request/response bodies, SSE streaming behavior, and admin/debug route protection.
 - `src/state.rs` owns application state, in-memory API storage, Postgres store adapters, provider construction, and session projection helpers.
 - `src/error.rs` maps domain, engine, persistence, and provider failures into API responses.
-- `tests/` contains in-memory API flow tests, Postgres-gated API tests, provider dispatch tests, and behavioral fixtures.
+- `tests/` contains in-memory API flow tests, Postgres-gated API tests, provider dispatch tests, replay helpers, behavioral fixtures, and live local-LLM smoke tests.
 
 ## Why It Exists
 
@@ -24,7 +24,9 @@ The API also owns cross-cutting operational behavior:
 - health and readiness routes
 - server-sent event formatting
 - provider registration and session provider assignment
+- provider health and readiness testing for the configured provider
 - selection between in-memory and PostgreSQL-backed stores
+- public and raw timeline inspection
 - raw debug exports that must not be exposed on normal player routes
 
 ## Engine Context
@@ -32,6 +34,8 @@ The API also owns cross-cutting operational behavior:
 For a player turn, route handlers load the session, resolve the configured provider, construct a `DefaultTurnPipeline`, and call into `engine`. The handler returns only the pipeline result or an SSE event stream; it does not apply deltas by hand.
 
 For streaming turns, this crate streams visible narration tokens first, then lets the engine finalize the turn by extracting and validating structured state changes before persistence.
+
+The public API currently exposes scenario CRUD plus `PUT /scenarios/:id`, session CRUD plus `GET /sessions/:id/timeline`, `PATCH /sessions/:id/provider`, `GET /sessions/:id/world-state`, `GET /sessions/:id/export`, `GET /sessions/:id/events`, turn submission routes, provider registration plus `POST /providers/test`, and admin-only raw export/timeline/debug endpoints.
 
 ## Important Boundaries
 
@@ -47,6 +51,7 @@ For streaming turns, this crate streams visible narration tokens first, then let
 cargo run -p api
 ROLEPLAY_STORAGE=memory cargo run -p api
 cargo test -p api --test memory_api_flows
+cargo test -p api --test behavioral_fixtures -- --ignored --test-threads=1
 cargo test -p api --test provider_dispatch_tests
-cargo test -p api --test postgres_api_flows -- --ignored
+cargo test -p api --test postgres_api_flows -- --ignored --test-threads=1
 ```

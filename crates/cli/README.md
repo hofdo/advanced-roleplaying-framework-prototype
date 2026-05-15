@@ -10,11 +10,11 @@ It should stay thin. It should not host its own engine logic, not own its own pr
 
 - `src/main.rs` parses arguments with `clap` and dispatches to the relevant subcommand.
 - `src/bootstrap.rs` builds `CliState` (`store`, `provider`, `turn_lock`) from `AppConfig`. Defaults to the in-memory store; `--postgres` opts into the persistent backend.
-- `src/commands/scenario.rs` — create / list / get / delete scenarios.
-- `src/commands/session.rs` — create / list / get sessions and assign providers.
+- `src/commands/scenario.rs` — create / list / get / delete / validate / inspect scenarios, plus sample and template helpers.
+- `src/commands/session.rs` — create / list / get sessions, inspect timelines, inspect provider bindings, and export replay fixtures.
 - `src/commands/turn.rs` — submit a blocking turn or stream narration tokens live.
 - `src/commands/world.rs` — show player-projected state or, with `--admin`, the raw `WorldState`.
-- `src/commands/provider.rs` — Postgres-only: register, list, remove, and probe registered LLM providers.
+- `src/commands/provider.rs` — Postgres-only: register, list, remove, probe, inspect status, and test registered LLM providers.
 - `src/samples.rs` — embedded JSON sample catalog for fast onboarding without writing JSON.
 - `src/scenario_io.rs` — scenario JSON parsing and domain validation for file imports.
 - `scenarios/samples/*.json` — built-in scenario definitions. Add a file here to add a built-in sample.
@@ -125,6 +125,7 @@ Built-in sample names are generated from `crates/cli/scenarios/samples/*.json`:
 - `ashfall-murder`
 - `chosen-beyond-goddess`
 - `glass-senate-crisis`
+- `bride-of-the-iron-archduke`
 
 Use `crates/cli/scenarios/templates/scenario.template.json` as a starting point for custom `--file` imports. Both built-in samples and imported files are deserialized as `domain::Scenario` and validated before storage.
 
@@ -168,14 +169,14 @@ cargo run -p cli -- turn <SESSION_ID> --input "describe the room" --stream
 |---|---|
 | `chat [--session UUID \| --scenario UUID \| --sample NAME] [--mode MODE] [--admin]` | Interactive REPL (see Chat mode section above) |
 | `scenario create [--file PATH \| --sample NAME]` | Create from validated JSON on disk or a built-in sample |
-| `scenario list / get <ID> / delete <ID>` | Standard scenario management |
+| `scenario list / get <ID> / delete <ID> / validate [--file PATH \| --sample NAME] / inspect <ID> / samples / template` | Scenario management, validation, inspection, sample listing, and template export |
 | `session create --scenario <ID> [--title TEXT]` | Start a session for an existing scenario |
-| `session list / get <ID>` | Enumerate / inspect sessions |
+| `session list / get <ID> / timeline <ID> / provider <ID> / export-fixture <ID>` | Enumerate sessions, inspect timeline/provider state, or export replay fixtures |
 | `session set-provider <ID> [--provider-id UUID \| --clear]` | Pin a session to a registered provider, or fall back to the default |
 | `turn <SESSION_ID> --input TEXT [--mode action\|dialogue\|direct\|remember] [--stream] [--admin]` | Submit a turn; `--stream` renders tokens live, `--admin` enables GM-only visibility |
 | `world <SESSION_ID> [--admin]` | Print projected (player-safe) state; `--admin` returns the raw `WorldState` |
 | `provider register --file PATH` | Postgres only: persist a `ProviderConfig` |
-| `provider list / remove <ID> / models <ID>` | Postgres only: enumerate the registry, remove an entry, or list models a provider exposes |
+| `provider list / remove <ID> / models <ID> / status <ID> / test` | Postgres only: enumerate the registry, remove an entry, inspect status, test connectivity, or list models a provider exposes |
 
 ### Output
 

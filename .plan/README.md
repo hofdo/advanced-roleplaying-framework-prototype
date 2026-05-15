@@ -1,8 +1,8 @@
 # Roadmap Implementation Plans
 
-This directory contains grouped implementation plans for the current roadmap. Existing flat files directly under `.plan/` are historical planning notes and are intentionally left untouched.
+This directory is a historical index of the implementation plans that shaped the current codebase. The numbered plans under `architecture/`, `features/`, and `gameplay/` are kept as reference material for the work that already landed in the repository.
 
-Each plan is written for a fresh agentic worker. The implementation files use checkbox steps, name the files to inspect or edit, include concrete verification commands, and keep acceptance criteria explicit.
+The flat files directly under `.plan/` are older planning notes and are intentionally left untouched.
 
 ## Architecture
 
@@ -29,16 +29,10 @@ Each plan is written for a fresh agentic worker. The implementation files use ch
 5. [NPC Agency](gameplay/05-npc-agency.md)
 6. [Iron Archduke Scenario Mechanics](gameplay/06-iron-archduke-scenario-mechanics.md)
 
-## Recommended Execution Order
+## Current State
 
-Run the architecture plans before gameplay expansion:
+The architecture, feature, and gameplay plans are already reflected in the repository. Use these files as a map back to the implementation work rather than as a live execution queue.
 
-1. `architecture/01-non-streaming-secrecy-boundary.md`
-2. `architecture/02-docker-backed-ci.md`
-3. `architecture/03-docs-current-state.md`
-4. `architecture/05-state-delta-extensibility.md`
-5. Feature and gameplay plans in dependency order
-6. `architecture/04-engine-module-decomposition.md` after behavior is locked by tests
+The gameplay plans share the same core surfaces: `domain::WorldState`, `domain::WorldStateDelta`, engine validation/reduction/projection, persistence JSON state storage, prompts, and API/CLI tests.
 
-The gameplay plans depend on the same core surfaces: `domain::WorldState`, `domain::WorldStateDelta`, engine validation/reduction/projection, persistence JSON state storage, prompts, and API/CLI tests.
-
+If you need to compare the code against the original plan intent, start with the numbered plan closest to the area you are touching and then read the corresponding crate README for the current implementation details.

@@ -8,21 +8,22 @@ This is the core behavior of the project.
 
 ## What Lives Here
 
-- `context.rs` builds role, NPC, faction, message, and reasoning-style context for prompts.
+- `context.rs` builds role, NPC, faction, player, clue, action-resolution, message, and reasoning-style context for prompts.
 - `scene.rs` classifies the current player input into a scene reasoning style.
-- `prompt.rs` builds prompts, parses structured model output, and prepares repair prompts.
+- `prompt/` builds prompts, renders narration-safe and oracle contexts, parses structured model output, and prepares repair prompts.
 - `safety.rs` strips hidden reasoning blocks from provider output.
 - `validation.rs` validates proposed world-state deltas against current state and secrecy constraints.
 - `reducer.rs` applies validated deltas to authoritative world state.
 - `projection.rs` produces player-visible state and changed-entity references.
 - `lock.rs` defines session turn locking.
-- `pipeline.rs` wires the full turn lifecycle together.
+- `pipeline/` wires the full turn lifecycle together, including pipeline events and typed turn-state helpers.
 
 ## Why It Exists
 
 The API needs one place to ask, "process this turn correctly." The engine crate provides that boundary. It centralizes the rules that make LLM output safe enough to use:
 
 - prompt construction is backend-owned
+- player-visible narration and oracle delta extraction are split so visible generation never needs GM-only facts
 - player narration and world-state mutation are separated where streaming allows it
 - hidden reasoning is removed
 - proposed deltas are parsed and validated before use
@@ -54,7 +55,7 @@ Streaming turns use the same safety goals with a different ordering: visible nar
 - The engine should depend on store traits, not SQL.
 - Validation should reject unsafe or incoherent deltas rather than patching them silently.
 - Reducers should apply already validated deltas and avoid re-implementing broad validation logic.
-- Projection is part of the secrecy boundary. Do not expose GM-only facts, hidden clocks, hidden NPCs, or raw internal state through player-facing projections.
+- Projection is part of the secrecy boundary. Do not expose GM-only facts, hidden clocks, hidden NPCs, hidden clues, hidden action resolutions, or raw internal state through player-facing projections.
 
 ## Useful Commands
 

@@ -9,7 +9,7 @@ It keeps durable storage concerns out of the domain and engine crates.
 ## What Lives Here
 
 - `migrations/` defines the PostgreSQL schema for scenarios, sessions, world states, messages, events, provider configs, and related data.
-- `src/repositories.rs` defines repository traits, `PgPersistence`, row mapping, provider config records, and `TurnStateStore` integration.
+- `src/repositories.rs` defines repository traits, `PgPersistence`, row mapping, provider config records, timeline/raw-timeline persistence, and `TurnStateStore` integration.
 - `src/lock.rs` implements a PostgreSQL-backed session turn lock.
 - `tests/` contains Docker-gated repository tests.
 
@@ -28,6 +28,7 @@ During a turn, persistence may be responsible for:
 - loading recent messages for prompt context
 - storing player and assistant messages
 - storing engine events and raw delta information
+- storing public and raw timeline history for CLI/API inspection
 - writing the new authoritative world-state version
 - storing registered LLM provider configurations
 - coordinating session turn locks across processes when configured
@@ -38,13 +39,12 @@ During a turn, persistence may be responsible for:
 - Do not put gameplay rules in repository methods. Repositories should store and retrieve already defined domain objects.
 - Preserve versioning behavior for world state; the engine relies on authoritative state advancing predictably.
 - Provider config records are configuration persistence, not provider implementations. Provider construction belongs in the API composition layer and provider behavior belongs in `providers`.
+- Replay and fixture exports depend on the stored world-state shape staying compatible with the domain model.
 - Migrations should be compatible with existing data unless an intentional migration plan says otherwise.
 
 ## Useful Commands
 
 ```bash
 cargo test -p persistence
-cargo test -p persistence --test repository_tests -- --ignored
-DATABASE_URL=postgres://roleplay:roleplay@localhost:5432/roleplay cargo test -p persistence --test repository_tests -- --ignored
 TEST_DATABASE_URL=postgres://roleplay:roleplay@localhost:5432/roleplay cargo test -p persistence --test repository_tests -- --ignored --test-threads=1
 ```

@@ -10,7 +10,8 @@ This crate is the vocabulary shared by the rest of the workspace.
 
 - `src/ids.rs` defines strongly typed identifiers used across scenarios, sessions, messages, and state.
 - `src/scenario.rs` defines scenario setup data such as roles, NPCs, factions, quests, secrets, locations, and clock templates.
-- `src/state.rs` defines runtime world state, visibility flags, typed `WorldStateDelta` mutations, frontend-visible state, changed-entity references, and message records.
+- `src/state.rs` defines runtime world state, visibility flags, typed `WorldStateDelta` mutations, player state, clues, action resolutions, frontend-visible state, changed-entity references, and message records.
+- `src/fixtures.rs` provides shared test builders for scenarios and world state so the rest of the workspace can seed valid domain objects without duplicating defaults.
 - `src/validation.rs` validates domain objects before they enter the engine or storage.
 - `DELTA_EXTENSION.md` tracks the cross-crate checklist for adding new `WorldStateDelta` variants safely.
 - `tests/` covers serialization round trips and validation behavior.
@@ -32,6 +33,7 @@ The domain model appears throughout the turn flow:
 - Delta validation checks proposed changes against known entities and secrecy rules.
 - Reducers apply validated deltas to authoritative state.
 - Projectors derive frontend-safe views from authoritative state.
+- Replay fixture drafts and sample scenarios use the same canonical shapes, so domain changes should always preserve serde compatibility.
 
 ## Important Boundaries
 
@@ -39,6 +41,7 @@ The domain model appears throughout the turn flow:
 - Keep this crate focused on data definitions and domain invariants.
 - Avoid provider-specific or database-specific fields unless they are truly part of the game domain.
 - Visibility and projection types are part of the secrecy boundary; changes should be reviewed with player-facing leakage in mind.
+- Structured reveal conditions now flow through `Secret`, `Fact`, and `ClueState`; changes to those shapes should be paired with prompt, validation, and sample updates.
 - New delta variants should include validation, reducer, projection, serialization, and API behavior updates in neighboring crates.
 
 ## Useful Commands

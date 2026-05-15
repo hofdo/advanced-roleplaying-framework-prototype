@@ -13,9 +13,9 @@ api/          Axum HTTP API, route handlers, application state, API stores
 cli/          `rp` binary — terminal driver linking the engine directly
 domain/       Canonical scenario, world state, delta, visibility, and validation types
 engine/       Turn pipeline, prompt/context construction, validation, reduction, projection
-persistence/  PostgreSQL repositories, migrations, and database-backed locks (see PostgresSessionTurnLock)
+persistence/  PostgreSQL repositories, migrations, timeline storage, and database-backed locks
 providers/    LLM provider abstraction plus OpenAI-compatible, llama.cpp, OpenRouter, and mock implementations
-shared/       Cross-crate configuration and shared application errors
+shared/       Cross-crate configuration, replay-fixture DTOs, and shared application errors
 ```
 
 PostgreSQL turn locking lives in `persistence/src/lock.rs` and is selected by `api::AppState` when `ROLEPLAY_STORAGE=postgres`.
@@ -30,6 +30,7 @@ The engine has a few boundaries that matter more than the individual web routes:
 - Normal API responses must project frontend-safe state rather than raw GM state.
 - Provider-specific HTTP behavior must not leak into the turn pipeline.
 - Storage details must not define domain or engine behavior.
+- Shared helpers may depend on `domain` for replay-fixture DTOs, but they should stay narrow and avoid becoming a general utility layer.
 
 Splitting the workspace this way keeps those rules enforceable in code review and makes it easier to test each layer independently.
 
@@ -59,8 +60,8 @@ api -> domain, engine, persistence, providers, shared
 engine -> domain, providers, shared
 persistence -> domain, engine, shared
 providers -> external HTTP/JSON crates only
+shared -> domain, serde, uuid, and other small cross-crate dependencies
 domain -> serialization, validation, IDs, time
-shared -> config and common error dependencies
 ```
 
 Important rule: `domain` should remain the lowest-level engine model. It should not depend on `api`, `engine`, `persistence`, or `providers`.
