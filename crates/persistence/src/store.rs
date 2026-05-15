@@ -10,7 +10,8 @@ use uuid::Uuid;
 
 use crate::{
     EventRecord, EventRepository, PgPersistence, ProviderConfigRepository, ProviderRecord,
-    RepoError, ScenarioRepository, SessionRecord, SessionRepository, WorldStateRepository,
+    RawTimeline, RepoError, ScenarioRepository, SessionRecord, SessionRepository, TimelineEntry,
+    WorldStateRepository,
 };
 
 #[async_trait]
@@ -42,6 +43,14 @@ pub trait ApplicationStore: TurnStateStore + Send + Sync {
         session_id: SessionId,
     ) -> Result<Option<WorldState>, TurnPipelineError>;
     async fn events(&self, session_id: SessionId) -> Result<Vec<EventRecord>, TurnPipelineError>;
+    async fn timeline(
+        &self,
+        session_id: SessionId,
+    ) -> Result<Vec<TimelineEntry>, TurnPipelineError>;
+    async fn raw_timeline(
+        &self,
+        session_id: SessionId,
+    ) -> Result<Option<RawTimeline>, TurnPipelineError>;
     async fn create_provider(
         &self,
         record: ProviderRecord,
@@ -63,6 +72,7 @@ struct InMemoryApplicationStoreInner {
     world_states: HashMap<SessionId, WorldState>,
     messages: HashMap<SessionId, Vec<MessageRecord>>,
     events: HashMap<SessionId, Vec<EventRecord>>,
+    timeline_entries: HashMap<SessionId, Vec<TimelineEntry>>,
     providers: Vec<ProviderRecord>,
 }
 
@@ -165,6 +175,7 @@ impl InMemoryApplicationStore {
         inner.world_states.remove(&id);
         inner.messages.remove(&id);
         inner.events.remove(&id);
+        inner.timeline_entries.remove(&id);
         existed
     }
 
@@ -196,6 +207,24 @@ impl InMemoryApplicationStore {
             .get(&session_id)
             .cloned()
             .unwrap_or_default()
+    }
+
+    pub fn snapshot_timeline(&self, session_id: SessionId) -> Option<Vec<TimelineEntry>> {
+        let inner = self.inner.lock().expect("application store mutex");
+        let _ = inner.sessions.get(&session_id)?;
+        Some(
+            inner
+                .timeline_entries
+                .get(&session_id)
+                .cloned()
+                .unwrap_or_default(),
+        )
+    }
+
+    pub fn snapshot_messages(&self, session_id: SessionId) -> Option<Vec<MessageRecord>> {
+        let inner = self.inner.lock().expect("application store mutex");
+        let _ = inner.sessions.get(&session_id)?;
+        Some(inner.messages.get(&session_id).cloned().unwrap_or_default())
     }
 }
 
@@ -275,6 +304,29 @@ impl ApplicationStore for InMemoryApplicationStore {
 
     async fn events(&self, session_id: SessionId) -> Result<Vec<EventRecord>, TurnPipelineError> {
         Ok(InMemoryApplicationStore::snapshot_events(self, session_id))
+    }
+
+    async fn timeline(
+        &self,
+        session_id: SessionId,
+    ) -> Result<Vec<TimelineEntry>, TurnPipelineError> {
+        InMemoryApplicationStore::snapshot_timeline(self, session_id).ok_or(TurnPipelineError::NotFound)
+    }
+
+    async fn raw_timeline(
+        &self,
+        session_id: SessionId,
+    ) -> Result<Option<RawTimeline>, TurnPipelineError> {
+        let Some(session) = InMemoryApplicationStore::snapshot_session(self, session_id) else {
+            return Ok(None);
+        };
+        Ok(Some(RawTimeline {
+            session,
+            messages: InMemoryApplicationStore::snapshot_messages(self, session_id)
+                .unwrap_or_default(),
+            deltas: vec![],
+            events: InMemoryApplicationStore::snapshot_events(self, session_id),
+        }))
     }
 
     async fn create_provider(
@@ -359,29 +411,61 @@ impl TurnStateStore for InMemoryApplicationStore {
         delta: ValidatedWorldStateDelta,
         updated_state: WorldState,
     ) -> Result<(), TurnPipelineError> {
+        let session_id = updated_state.session_id;
+        let world_state_version = updated_state.version;
+        let user_timeline_entry = TimelineEntry {
+            kind: "user_message".into(),
+            description: user_message.content.clone(),
+            message_id: Some(user_message.id),
+            event_id: None,
+            world_state_version: None,
+        };
         if !self.store_raw_provider_output {
             assistant_message.raw_provider_output = None;
         }
+        let assistant_timeline_entry = TimelineEntry {
+            kind: "assistant_message".into(),
+            description: assistant_message.content.clone(),
+            message_id: Some(assistant_message.id),
+            event_id: None,
+            world_state_version: Some(world_state_version),
+        };
         let mut inner = self.inner.lock().expect("application store mutex");
         inner
             .messages
-            .entry(updated_state.session_id)
+            .entry(session_id)
             .or_default()
             .extend([user_message, assistant_message.clone()]);
         inner
+            .timeline_entries
+            .entry(session_id)
+            .or_default()
+            .extend([user_timeline_entry, assistant_timeline_entry]);
+        inner
             .world_states
-            .insert(updated_state.session_id, updated_state);
+            .insert(session_id, updated_state);
         for description in delta.0.event_log_entries {
-            let session_id = assistant_message.session_id;
+            let record = EventRecord {
+                id: Uuid::new_v4(),
+                session_id,
+                event_type: "world_event".into(),
+                description,
+            };
             inner
                 .events
                 .entry(session_id)
                 .or_default()
-                .push(EventRecord {
-                    id: Uuid::new_v4(),
-                    session_id,
-                    event_type: "world_event".into(),
-                    description,
+                .push(record.clone());
+            inner
+                .timeline_entries
+                .entry(session_id)
+                .or_default()
+                .push(TimelineEntry {
+                    kind: record.event_type.clone(),
+                    description: record.description.clone(),
+                    message_id: None,
+                    event_id: Some(record.id),
+                    world_state_version: Some(world_state_version),
                 });
         }
         Ok(())
@@ -392,17 +476,28 @@ impl TurnStateStore for InMemoryApplicationStore {
         session_id: SessionId,
         description: String,
     ) -> Result<(), TurnPipelineError> {
-        self.inner
-            .lock()
-            .expect("application store mutex")
+        let record = EventRecord {
+            id: Uuid::new_v4(),
+            session_id,
+            event_type: "turn_error".into(),
+            description,
+        };
+        let mut inner = self.inner.lock().expect("application store mutex");
+        inner
             .events
             .entry(session_id)
             .or_default()
-            .push(EventRecord {
-                id: Uuid::new_v4(),
-                session_id,
-                event_type: "turn_error".into(),
-                description,
+            .push(record.clone());
+        inner
+            .timeline_entries
+            .entry(session_id)
+            .or_default()
+            .push(TimelineEntry {
+                kind: record.event_type.clone(),
+                description: record.description,
+                message_id: None,
+                event_id: Some(record.id),
+                world_state_version: None,
             });
         Ok(())
     }
@@ -413,17 +508,28 @@ impl TurnStateStore for InMemoryApplicationStore {
         event_type: &'static str,
         description: String,
     ) -> Result<(), TurnPipelineError> {
-        self.inner
-            .lock()
-            .expect("application store mutex")
+        let record = EventRecord {
+            id: Uuid::new_v4(),
+            session_id,
+            event_type: event_type.into(),
+            description,
+        };
+        let mut inner = self.inner.lock().expect("application store mutex");
+        inner
             .events
             .entry(session_id)
             .or_default()
-            .push(EventRecord {
-                id: Uuid::new_v4(),
-                session_id,
-                event_type: event_type.into(),
-                description,
+            .push(record.clone());
+        inner
+            .timeline_entries
+            .entry(session_id)
+            .or_default()
+            .push(TimelineEntry {
+                kind: record.event_type.clone(),
+                description: record.description,
+                message_id: None,
+                event_id: Some(record.id),
+                world_state_version: None,
             });
         Ok(())
     }
@@ -613,6 +719,30 @@ impl ApplicationStore for PostgresApplicationStore {
             .map_err(repo_to_pipeline)
     }
 
+    async fn timeline(
+        &self,
+        _session_id: SessionId,
+    ) -> Result<Vec<TimelineEntry>, TurnPipelineError> {
+        Err(TurnPipelineError::Store(
+            "session timeline queries are not implemented for postgres yet".into(),
+        ))
+    }
+
+    async fn raw_timeline(
+        &self,
+        session_id: SessionId,
+    ) -> Result<Option<RawTimeline>, TurnPipelineError> {
+        let session = SessionRepository::get(&self.persistence, session_id)
+            .await
+            .map_err(repo_to_pipeline)?;
+        if session.is_none() {
+            return Ok(None);
+        }
+        Err(TurnPipelineError::Store(
+            "raw session timeline queries are not implemented for postgres yet".into(),
+        ))
+    }
+
     async fn create_provider(
         &self,
         record: ProviderRecord,
@@ -783,9 +913,10 @@ pub type ApiStore = InMemoryApplicationStore;
 mod tests {
     use super::initial_world_state;
     use domain::{
-        ClockTemplate, Faction, FactionIdentity, Location, Npc, NpcStatus, Quest, RoleIdentity,
-        Scenario, ScenarioType,
+        ClockTemplate, Faction, FactionIdentity, Location, MessageRecord, MessageRole, Npc,
+        NpcStatus, Quest, RoleIdentity, Scenario, ScenarioType, WorldStateDelta,
     };
+    use engine::{TurnStateStore, ValidatedWorldStateDelta};
     use uuid::Uuid;
 
     fn scenario() -> Scenario {
@@ -907,5 +1038,72 @@ mod tests {
             .expect("adela state");
         assert_eq!(adela.location_id.as_deref(), Some("winter-orphan-house"));
         assert!(!adela.visible_to_player);
+    }
+
+    #[tokio::test]
+    async fn timeline_returns_turn_messages_and_world_events_in_order() {
+        let store = super::InMemoryApplicationStore::new(true);
+        let scenario = scenario();
+        let scenario_id = scenario.id;
+        store.insert_scenario(scenario);
+        let session = store
+            .insert_session(scenario_id, "Timeline Session".into())
+            .expect("session should exist");
+
+        let user_message = MessageRecord {
+            id: Uuid::new_v4(),
+            session_id: session.id,
+            role: MessageRole::User,
+            speaker_id: None,
+            content: "I step into the citadel.".into(),
+            scene_type: None,
+            prompt_template_version: None,
+            raw_provider_output: None,
+        };
+        let assistant_message = MessageRecord {
+            id: Uuid::new_v4(),
+            session_id: session.id,
+            role: MessageRole::Assistant,
+            speaker_id: Some("steward-marta".into()),
+            content: "Steward Marta inclines her head.".into(),
+            scene_type: None,
+            prompt_template_version: Some("timeline-test".into()),
+            raw_provider_output: None,
+        };
+        let delta = ValidatedWorldStateDelta(WorldStateDelta {
+            event_log_entries: vec!["The gates grind open behind the player.".into()],
+            ..WorldStateDelta::default()
+        });
+        let mut updated_state = store
+            .snapshot_world_state(session.id)
+            .expect("world state should exist");
+        updated_state.version = 1;
+
+        TurnStateStore::persist_successful_turn(
+            &store,
+            user_message.clone(),
+            assistant_message.clone(),
+            delta,
+            updated_state,
+        )
+        .await
+        .expect("turn should persist");
+
+        let timeline = super::ApplicationStore::timeline(&store, session.id)
+            .await
+            .expect("timeline should load");
+
+        assert_eq!(timeline.len(), 3);
+        assert_eq!(timeline[0].kind, "user_message");
+        assert_eq!(timeline[0].description, user_message.content);
+        assert_eq!(timeline[1].kind, "assistant_message");
+        assert_eq!(timeline[1].description, assistant_message.content);
+        assert_eq!(timeline[1].world_state_version, Some(1));
+        assert_eq!(timeline[2].kind, "world_event");
+        assert_eq!(
+            timeline[2].description,
+            "The gates grind open behind the player."
+        );
+        assert_eq!(timeline[2].world_state_version, Some(1));
     }
 }

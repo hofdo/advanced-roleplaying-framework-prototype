@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use domain::{
     MessageRecord, MessageRole, Scenario, ScenarioId, SceneReasoningStyle, SessionId, WorldState,
+    WorldStateDelta,
 };
 use engine::{LoadedTurnState, TurnPipelineError, TurnStateStore, ValidatedWorldStateDelta};
 use serde::{Deserialize, Serialize};
@@ -115,6 +116,32 @@ pub struct EventRecord {
     pub session_id: SessionId,
     pub event_type: String,
     pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TimelineEntry {
+    pub kind: String,
+    pub description: String,
+    pub message_id: Option<Uuid>,
+    pub event_id: Option<Uuid>,
+    pub world_state_version: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RawTimeline {
+    pub session: SessionRecord,
+    pub messages: Vec<MessageRecord>,
+    pub deltas: Vec<WorldStateDeltaRecord>,
+    pub events: Vec<EventRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WorldStateDeltaRecord {
+    pub id: Uuid,
+    pub session_id: SessionId,
+    pub message_id: Option<Uuid>,
+    pub delta: WorldStateDelta,
+    pub validation_status: String,
 }
 
 #[async_trait]
