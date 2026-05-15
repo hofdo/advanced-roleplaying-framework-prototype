@@ -5,13 +5,14 @@ use domain::{
     WorldState,
 };
 use engine::{LoadedTurnState, TurnPipelineError, TurnStateStore, ValidatedWorldStateDelta};
+use sqlx::Row;
 use std::{collections::HashMap, sync::Mutex};
 use uuid::Uuid;
 
 use crate::{
-    EventRecord, EventRepository, PgPersistence, ProviderConfigRepository, ProviderRecord,
-    RawTimeline, RepoError, ScenarioRepository, SessionRecord, SessionRepository, TimelineEntry,
-    WorldStateRepository,
+    EventRecord, EventRepository, MessageRepository, PgPersistence, ProviderConfigRepository,
+    ProviderRecord, RawTimeline, RepoError, ScenarioRepository, SessionRecord,
+    SessionRepository, TimelineEntry, WorldStateDeltaRepository, WorldStateRepository,
 };
 
 #[async_trait]
@@ -721,11 +722,96 @@ impl ApplicationStore for PostgresApplicationStore {
 
     async fn timeline(
         &self,
-        _session_id: SessionId,
+        session_id: SessionId,
     ) -> Result<Vec<TimelineEntry>, TurnPipelineError> {
-        Err(TurnPipelineError::Store(
-            "session timeline queries are not implemented for postgres yet".into(),
-        ))
+        if SessionRepository::get(&self.persistence, session_id)
+            .await
+            .map_err(repo_to_pipeline)?
+            .is_none()
+        {
+            return Err(TurnPipelineError::NotFound);
+        }
+
+        let rows = sqlx::query(
+            "WITH ordered_deltas AS (
+                 SELECT message_id,
+                        created_at,
+                        row_number() OVER (ORDER BY created_at, id) AS world_state_version
+                 FROM world_state_deltas
+                 WHERE session_id = $1
+                   AND validation_status = 'applied'
+             ),
+             timeline_items AS (
+                 SELECT CASE
+                            WHEN role = 'Assistant' THEN 'assistant_message'
+                            WHEN role = 'System' THEN 'system_message'
+                            ELSE 'user_message'
+                        END AS kind,
+                        content AS description,
+                        id AS message_id,
+                        NULL::uuid AS event_id,
+                        created_at,
+                        CASE
+                            WHEN role = 'Assistant' THEN (
+                                SELECT world_state_version
+                                FROM ordered_deltas
+                                WHERE ordered_deltas.message_id = messages.id
+                                LIMIT 1
+                            )
+                            ELSE NULL
+                        END AS world_state_version,
+                        CASE
+                            WHEN role = 'Assistant' THEN 2
+                            WHEN role = 'System' THEN 0
+                            ELSE 1
+                        END AS source_rank
+                 FROM messages
+                 WHERE session_id = $1
+                 UNION ALL
+                 SELECT event_type AS kind,
+                        description,
+                        NULL::uuid AS message_id,
+                        id AS event_id,
+                        created_at,
+                        (
+                            SELECT MAX(world_state_version)
+                            FROM ordered_deltas
+                            WHERE ordered_deltas.created_at <= events.created_at
+                        ) AS world_state_version,
+                        3 AS source_rank
+                 FROM events
+                 WHERE session_id = $1
+             )
+             SELECT kind, description, message_id, event_id, world_state_version
+             FROM timeline_items
+             ORDER BY created_at, source_rank, COALESCE(message_id, event_id)",
+        )
+        .bind(session_id)
+        .fetch_all(self.persistence.pool())
+        .await
+        .map_err(|error| TurnPipelineError::Store(error.to_string()))?;
+
+        rows.into_iter()
+            .map(|row| {
+                Ok(TimelineEntry {
+                    kind: row
+                        .try_get("kind")
+                        .map_err(|error| TurnPipelineError::Store(error.to_string()))?,
+                    description: row
+                        .try_get("description")
+                        .map_err(|error| TurnPipelineError::Store(error.to_string()))?,
+                    message_id: row
+                        .try_get("message_id")
+                        .map_err(|error| TurnPipelineError::Store(error.to_string()))?,
+                    event_id: row
+                        .try_get("event_id")
+                        .map_err(|error| TurnPipelineError::Store(error.to_string()))?,
+                    world_state_version: row
+                        .try_get("world_state_version")
+                        .map_err(|error| TurnPipelineError::Store(error.to_string()))?,
+                })
+            })
+            .collect()
     }
 
     async fn raw_timeline(
@@ -735,12 +821,24 @@ impl ApplicationStore for PostgresApplicationStore {
         let session = SessionRepository::get(&self.persistence, session_id)
             .await
             .map_err(repo_to_pipeline)?;
-        if session.is_none() {
+        let Some(session) = session else {
             return Ok(None);
-        }
-        Err(TurnPipelineError::Store(
-            "raw session timeline queries are not implemented for postgres yet".into(),
-        ))
+        };
+        let messages = MessageRepository::list(&self.persistence, session_id)
+            .await
+            .map_err(repo_to_pipeline)?;
+        let deltas = WorldStateDeltaRepository::list(&self.persistence, session_id)
+            .await
+            .map_err(repo_to_pipeline)?;
+        let events = EventRepository::list(&self.persistence, session_id)
+            .await
+            .map_err(repo_to_pipeline)?;
+        Ok(Some(RawTimeline {
+            session,
+            messages,
+            deltas,
+            events,
+        }))
     }
 
     async fn create_provider(

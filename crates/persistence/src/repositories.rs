@@ -76,11 +76,17 @@ pub trait WorldStateRepository: Send + Sync {
 #[async_trait]
 pub trait MessageRepository: Send + Sync {
     async fn append(&self, message: &MessageRecord) -> Result<(), RepoError>;
+    async fn list(&self, session_id: SessionId) -> Result<Vec<MessageRecord>, RepoError>;
     async fn recent(
         &self,
         session_id: SessionId,
         limit: i64,
     ) -> Result<Vec<MessageRecord>, RepoError>;
+}
+
+#[async_trait]
+pub trait WorldStateDeltaRepository: Send + Sync {
+    async fn list(&self, session_id: SessionId) -> Result<Vec<WorldStateDeltaRecord>, RepoError>;
 }
 
 #[async_trait]
@@ -368,6 +374,20 @@ impl MessageRepository for PgPersistence {
         Ok(())
     }
 
+    async fn list(&self, session_id: SessionId) -> Result<Vec<MessageRecord>, RepoError> {
+        let rows = sqlx::query(
+            "SELECT id, session_id, role, speaker_id, content, scene_type, prompt_template_version, raw_provider_output
+             FROM messages
+             WHERE session_id = $1
+             ORDER BY created_at, id",
+        )
+        .bind(session_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter().map(row_to_message).collect()
+    }
+
     async fn recent(
         &self,
         session_id: SessionId,
@@ -386,6 +406,24 @@ impl MessageRepository for PgPersistence {
         .await?;
 
         rows.into_iter().map(row_to_message).collect()
+    }
+}
+
+#[async_trait]
+impl WorldStateDeltaRepository for PgPersistence {
+    async fn list(&self, session_id: SessionId) -> Result<Vec<WorldStateDeltaRecord>, RepoError> {
+        sqlx::query(
+            "SELECT id, session_id, message_id, delta, validation_status
+             FROM world_state_deltas
+             WHERE session_id = $1
+             ORDER BY created_at, id",
+        )
+        .bind(session_id)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(row_to_world_state_delta)
+        .collect()
     }
 }
 
@@ -601,6 +639,20 @@ fn row_to_message(row: sqlx::postgres::PgRow) -> Result<MessageRecord, RepoError
         raw_provider_output: row
             .try_get::<Option<sqlx::types::Json<serde_json::Value>>, _>("raw_provider_output")?
             .map(|json| json.0),
+    })
+}
+
+fn row_to_world_state_delta(
+    row: sqlx::postgres::PgRow,
+) -> Result<WorldStateDeltaRecord, RepoError> {
+    Ok(WorldStateDeltaRecord {
+        id: row.try_get("id")?,
+        session_id: row.try_get("session_id")?,
+        message_id: row.try_get("message_id")?,
+        delta: row
+            .try_get::<sqlx::types::Json<WorldStateDelta>, _>("delta")?
+            .0,
+        validation_status: row.try_get("validation_status")?,
     })
 }
 

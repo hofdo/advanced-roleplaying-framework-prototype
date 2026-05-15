@@ -1,9 +1,9 @@
 use domain::{MessageRecord, MessageRole, Scenario, WorldState, fixtures};
-use engine::{SessionTurnLock, TurnLockError};
+use engine::{SessionTurnLock, TurnLockError, TurnStateStore, ValidatedWorldStateDelta};
 use persistence::{
-    EventRepository, MessageRepository, PgPersistence, PostgresSessionTurnLock,
-    ProviderConfigRepository, ProviderRecord, ScenarioRepository, SessionRepository,
-    WorldStateRepository,
+    ApplicationStore, EventRepository, MessageRepository, PgPersistence, PostgresApplicationStore,
+    PostgresSessionTurnLock, ProviderConfigRepository, ProviderRecord, ScenarioRepository,
+    SessionRepository, WorldStateDeltaRepository, WorldStateRepository,
 };
 use sqlx::Executor;
 use testcontainers_modules::{
@@ -84,6 +84,22 @@ fn sample_message(session_id: Uuid) -> MessageRecord {
         scene_type: None,
         prompt_template_version: None,
         raw_provider_output: None,
+    }
+}
+
+fn sample_assistant_message(session_id: Uuid) -> MessageRecord {
+    MessageRecord {
+        id: Uuid::new_v4(),
+        session_id,
+        role: MessageRole::Assistant,
+        speaker_id: Some("examiner".into()),
+        content: "The examiner signals for the gates to close.".into(),
+        scene_type: None,
+        prompt_template_version: Some("timeline-test".into()),
+        raw_provider_output: Some(serde_json::json!({
+            "provider": "test",
+            "raw": "ok"
+        })),
     }
 }
 
@@ -405,6 +421,93 @@ async fn recent_messages_respects_limit() {
     // Asking for more than available — should return only 2
     let recent = MessageRepository::recent(&p, session.id, 10).await.unwrap();
     assert_eq!(recent.len(), 2);
+}
+
+#[tokio::test]
+#[ignore = "requires Docker-backed Postgres integration"]
+async fn timeline_lists_world_state_deltas_for_applied_turn() {
+    let (p, _container) = setup().await;
+
+    let scenario = sample_scenario();
+    let scenario_id = scenario.id;
+    ScenarioRepository::create(&p, scenario).await.unwrap();
+    let session = SessionRepository::create(&p, scenario_id, "Timeline Delta Session".into())
+        .await
+        .unwrap();
+    WorldStateRepository::save(&p, &sample_world_state(session.id, scenario_id), None)
+        .await
+        .unwrap();
+
+    let user_message = sample_message(session.id);
+    let assistant_message = sample_assistant_message(session.id);
+    let mut updated_state = sample_world_state(session.id, scenario_id);
+    updated_state.version = 1;
+    let delta = ValidatedWorldStateDelta(domain::WorldStateDelta {
+        event_log_entries: vec!["The guild doors seal shut.".into()],
+        ..domain::WorldStateDelta::default()
+    });
+
+    TurnStateStore::persist_successful_turn(
+        &p,
+        user_message,
+        assistant_message,
+        delta.clone(),
+        updated_state,
+    )
+    .await
+    .unwrap();
+
+    let deltas = WorldStateDeltaRepository::list(&p, session.id)
+        .await
+        .unwrap();
+    assert_eq!(deltas.len(), 1);
+    assert_eq!(deltas[0].validation_status, "applied");
+    assert_eq!(deltas[0].delta, delta.0);
+  }
+
+#[tokio::test]
+#[ignore = "requires Docker-backed Postgres integration"]
+async fn raw_timeline_includes_messages_deltas_events() {
+    let (p, _container) = setup().await;
+
+    let scenario = sample_scenario();
+    let scenario_id = scenario.id;
+    ScenarioRepository::create(&p, scenario).await.unwrap();
+    let session = SessionRepository::create(&p, scenario_id, "Raw Timeline Session".into())
+        .await
+        .unwrap();
+    WorldStateRepository::save(&p, &sample_world_state(session.id, scenario_id), None)
+        .await
+        .unwrap();
+
+    let user_message = sample_message(session.id);
+    let assistant_message = sample_assistant_message(session.id);
+    let mut updated_state = sample_world_state(session.id, scenario_id);
+    updated_state.version = 1;
+    let delta = ValidatedWorldStateDelta(domain::WorldStateDelta {
+        event_log_entries: vec!["The examiner marks the ledger.".into()],
+        ..domain::WorldStateDelta::default()
+    });
+
+    TurnStateStore::persist_successful_turn(
+        &p,
+        user_message,
+        assistant_message,
+        delta,
+        updated_state,
+    )
+    .await
+    .unwrap();
+
+    let store = PostgresApplicationStore::new(p.clone(), true);
+    let raw_timeline = ApplicationStore::raw_timeline(&store, session.id)
+        .await
+        .unwrap()
+        .expect("raw timeline should exist");
+
+    assert_eq!(raw_timeline.messages.len(), 2);
+    assert_eq!(raw_timeline.deltas.len(), 1);
+    assert!(!raw_timeline.events.is_empty());
 }
 
 // ===========================================================================
