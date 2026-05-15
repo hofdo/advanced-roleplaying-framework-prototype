@@ -23,3 +23,6 @@ shared.workspace = true
 tokio.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+wiremock.workspace = true

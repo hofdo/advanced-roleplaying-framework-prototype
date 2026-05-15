@@ -599,8 +599,9 @@ async fn handle_turn(chat: &mut ChatState, input: String) -> Result<()> {
         println!("no active session — use /scenario create then /session new, or /session use.");
         return Ok(());
     };
+    let provider = chat.cli.resolve_session_provider(session_id).await?;
     let pipeline = Arc::new(DefaultTurnPipeline::with_lock(
-        Arc::clone(&chat.cli.provider),
+        provider,
         Arc::clone(&chat.cli.store),
         chat.cli.turn_lock.clone(),
     ));
