@@ -36,6 +36,14 @@ async fn replay_guildhall_flood_fixture() {
         .expect("fixture replays");
 }
 
+#[tokio::test]
+#[ignore = "requires Docker-backed Postgres integration"]
+async fn replay_secret_leak_prevention_fixture() {
+    replay::run_fixture(include_str!("fixtures/replay/secret-leak-prevention.json"))
+        .await
+        .expect("fixture replays");
+}
+
 /// Full pipeline fixture:
 /// - Player floods the guildhall (action turn)
 /// - LLM returns: NPCs alarmed (attitude changed), guild standing drops, fame clock advances
