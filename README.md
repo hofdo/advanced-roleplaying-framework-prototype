@@ -262,6 +262,13 @@ cargo run -p cli -- chat --sample chosen-beyond-goddess
 # Inside the REPL: plain text submits a turn, slash-commands manage state.
 # /help lists everything.
 
+# Dev launchers
+cargo run -p cli -- dev local
+cargo run -p cli -- dev openrouter
+# Add --destroy to remove the owned Postgres stack on exit.
+cargo run -p cli -- dev local --scenario <SCENARIO_ID>
+cargo run -p cli -- dev openrouter --scenario <SCENARIO_ID>
+
 # One-shot commands
 cargo run -p cli -- scenario create --sample chosen-beyond-goddess
 cargo run -p cli -- session create --scenario <SCENARIO_ID> --title "Smoke"
@@ -273,11 +280,15 @@ cargo run -p cli -- world <SESSION_ID> --admin   # includes GM-only facts
 
 Built-in sample scenarios are `ashfall-murder`, `bride-of-the-iron-archduke`, `chosen-beyond-goddess`, and `glass-senate-crisis`. Custom scenarios can be copied from `crates/cli/scenarios/templates/scenario.template.json` and loaded with `scenario create --file PATH`; imports are validated before storage.
 
+`dev local` and `dev openrouter` accept either `--sample NAME` or `--scenario UUID`. `--destroy` removes the owned Postgres stack on exit. `dev openrouter` also expects `OPENROUTER_API_KEY` to be set.
+
 Subcommands:
 
 | Command | Description |
 |---|---|
 | `chat [--sample NAME \| --scenario UUID \| --session UUID]` | Interactive REPL: plain text → turn, `/`-prefixed → command |
+| `dev local [--sample NAME \| --scenario UUID] [--destroy]` | Start Postgres, launch the local llama.cpp stack, and open chat on the default sample or a specific scenario |
+| `dev openrouter [--sample NAME \| --scenario UUID] [--destroy]` | Start Postgres, configure OpenRouter, and open chat on the default sample or a specific scenario |
 | `scenario create [--file PATH \| --sample NAME]` | Create from JSON or a built-in sample |
 | `scenario list / get / delete / validate / inspect / samples / template` | Standard scenario management, validation, inspection, sample listing, and template export |
 | `session create --scenario <ID>` | Start a new session |
