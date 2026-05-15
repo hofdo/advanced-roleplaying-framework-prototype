@@ -333,6 +333,92 @@ async fn second_turn_uses_updated_state() {
 
 #[tokio::test]
 #[ignore = "requires Docker-backed Postgres integration"]
+async fn timeline_routes_return_public_and_raw_history() {
+    let raw = r#"{
+        "player_response": "The examiner dismisses the crowd and studies your answer in silence.",
+        "world_state_delta": {
+            "facts_to_add": [],
+            "npc_changes": [],
+            "faction_changes": [],
+            "quest_changes": [],
+            "clock_changes": [],
+            "relationship_changes": [],
+            "location_change": null,
+            "event_log_entries": ["The registrar seals the turn in the session ledger."]
+        }
+    }"#;
+    let mut config = shared::AppConfig::default();
+    config.storage.backend = shared::StorageBackend::Postgres;
+    config.admin.enabled = true;
+    config.admin.token = Some(ADMIN_TOKEN.into());
+    let ctx =
+        postgres_test_context_with_config(mock_provider(turn_responses([raw.to_string()])), config)
+            .await
+            .expect("test context");
+    let scenario = sample_scenario();
+
+    send_json(
+        &ctx.router,
+        "POST",
+        "/scenarios",
+        serde_json::to_value(&scenario).unwrap(),
+    )
+    .await;
+    let (_, session_body) = send_json(
+        &ctx.router,
+        "POST",
+        "/sessions",
+        json!({ "scenario_id": scenario.id, "title": "Timeline Session" }),
+    )
+    .await;
+    let session: persistence::SessionRecord = json_body(&session_body);
+
+    let (turn_status, _) = send_json(
+        &ctx.router,
+        "POST",
+        &format!("/sessions/{}/turn", session.id),
+        json!({ "input": "I answer without lowering my gaze.", "mode": "dialogue" }),
+    )
+    .await;
+    assert_eq!(turn_status, http::StatusCode::OK);
+
+    let (public_status, public_body) = send_empty(
+        &ctx.router,
+        "GET",
+        &format!("/sessions/{}/timeline", session.id),
+    )
+    .await;
+    let public_timeline: Value = json_body(&public_body);
+    let public_entries = public_timeline.as_array().expect("timeline array");
+    let public_kinds = public_entries
+        .iter()
+        .filter_map(|entry| entry["kind"].as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(public_status, http::StatusCode::OK);
+    assert!(public_kinds.contains(&"user_message"));
+    assert!(public_kinds.contains(&"assistant_message"));
+    assert!(public_kinds.contains(&"world_event"));
+
+    let (raw_status, raw_body) = send_empty_with_bearer(
+        &ctx.router,
+        "GET",
+        &format!("/admin/sessions/{}/timeline/raw", session.id),
+        ADMIN_TOKEN,
+    )
+    .await;
+    let raw_timeline: Value = json_body(&raw_body);
+
+    assert_eq!(raw_status, http::StatusCode::OK);
+    assert_eq!(raw_timeline["messages"].as_array().unwrap().len(), 2);
+    assert_eq!(raw_timeline["deltas"].as_array().unwrap().len(), 1);
+    assert!(!raw_timeline["events"].as_array().unwrap().is_empty());
+
+    ctx.cleanup().await;
+}
+
+#[tokio::test]
+#[ignore = "requires Docker-backed Postgres integration"]
 async fn streaming_turn_emits_tokens_then_final_and_persists_after_final() {
     let delta = r#"{
         "facts_to_add": [],

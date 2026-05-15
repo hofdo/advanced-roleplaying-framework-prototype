@@ -1003,6 +1003,130 @@ async fn campaign_memory_turn_persists_and_projects_visible_memory() {
 }
 
 #[tokio::test]
+async fn session_timeline_lists_turn_entries() {
+    let raw = r#"{
+        "player_response": "The examiner folds the ledger shut with a measured nod.",
+        "world_state_delta": {
+            "facts_to_add": [],
+            "npc_changes": [],
+            "faction_changes": [],
+            "quest_changes": [],
+            "clock_changes": [],
+            "relationship_changes": [],
+            "location_change": null,
+            "event_log_entries": ["The examiner records the player's restraint."]
+        }
+    }"#;
+    let router = memory_test_context(mock_provider(turn_responses([raw.to_string()])));
+    let scenario = sample_scenario();
+
+    send_json(
+        &router,
+        "POST",
+        "/scenarios",
+        serde_json::to_value(&scenario).unwrap(),
+    )
+    .await;
+    let (_, session_body) = send_json(
+        &router,
+        "POST",
+        "/sessions",
+        json!({ "scenario_id": scenario.id, "title": "Timeline Session" }),
+    )
+    .await;
+    let session: Value = json_body(&session_body);
+    let session_id = session["id"].as_str().unwrap();
+
+    let (turn_status, turn_body) = send_json(
+        &router,
+        "POST",
+        &format!("/sessions/{session_id}/turn"),
+        json!({ "input": "I steady my voice and answer plainly.", "mode": "dialogue" }),
+    )
+    .await;
+    assert_eq!(turn_status, StatusCode::OK);
+    let _: Value = json_body(&turn_body);
+
+    let (status, body) =
+        send_empty(&router, "GET", &format!("/sessions/{session_id}/timeline")).await;
+    let timeline: Value = json_body(&body);
+    let entries = timeline.as_array().expect("timeline array");
+    let kinds = entries
+        .iter()
+        .filter_map(|entry| entry["kind"].as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(kinds.contains(&"user_message"));
+    assert!(kinds.contains(&"assistant_message"));
+    assert!(kinds.contains(&"world_event"));
+}
+
+#[tokio::test]
+async fn admin_raw_timeline_exposes_messages_deltas_and_events() {
+    let raw = r#"{
+        "player_response": "The examiner makes a note and waves the next witness forward.",
+        "world_state_delta": {
+            "facts_to_add": [],
+            "npc_changes": [],
+            "faction_changes": [],
+            "quest_changes": [],
+            "clock_changes": [],
+            "relationship_changes": [],
+            "location_change": null,
+            "event_log_entries": ["The clerk adds the exchange to the guild record."]
+        }
+    }"#;
+    let mut config = shared::AppConfig::default();
+    config.storage.backend = shared::StorageBackend::Memory;
+    config.admin.enabled = true;
+    config.admin.token = Some(ADMIN_TOKEN.into());
+    let router =
+        memory_test_context_with_config(mock_provider(turn_responses([raw.to_string()])), config);
+    let scenario = sample_scenario();
+
+    send_json(
+        &router,
+        "POST",
+        "/scenarios",
+        serde_json::to_value(&scenario).unwrap(),
+    )
+    .await;
+    let (_, session_body) = send_json(
+        &router,
+        "POST",
+        "/sessions",
+        json!({ "scenario_id": scenario.id, "title": "Raw Timeline Session" }),
+    )
+    .await;
+    let session: Value = json_body(&session_body);
+    let session_id = session["id"].as_str().unwrap();
+
+    let (turn_status, _) = send_json(
+        &router,
+        "POST",
+        &format!("/sessions/{session_id}/turn"),
+        json!({ "input": "I answer the clerk directly.", "mode": "dialogue" }),
+    )
+    .await;
+    assert_eq!(turn_status, StatusCode::OK);
+
+    let (status, body) = send_empty_with_bearer(
+        &router,
+        "GET",
+        &format!("/admin/sessions/{session_id}/timeline/raw"),
+        ADMIN_TOKEN,
+    )
+    .await;
+    let payload: Value = json_body(&body);
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(payload["messages"].as_array().unwrap().len(), 2);
+    assert!(payload["deltas"].as_array().is_some());
+    assert!(!payload["events"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn non_streaming_turn_visible_prompt_does_not_receive_gm_only_fact() {
     let visible = "The examiner watches you without lowering her hand from the alarm bell.";
     let empty_delta = r#"{

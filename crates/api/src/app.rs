@@ -47,6 +47,7 @@ pub fn app_router(app_state: AppState) -> Router {
         .route("/sessions/:session_id/turn", post(turn))
         .route("/sessions/:session_id/turn/stream", post(turn_stream))
         .route("/sessions/:session_id/world-state", get(get_world_state))
+        .route("/sessions/:session_id/timeline", get(get_timeline))
         .route("/sessions/:session_id/events", get(list_events));
 
     let router = if app_state.config.admin.enabled {
@@ -55,6 +56,10 @@ pub fn app_router(app_state: AppState) -> Router {
                 .route(
                     "/admin/sessions/:session_id/export/raw",
                     get(export_session_raw),
+                )
+                .route(
+                    "/admin/sessions/:session_id/timeline/raw",
+                    get(get_raw_timeline),
                 )
                 .route("/admin/sessions/:session_id/turn/debug", post(debug_turn))
                 .route_layer(middleware::from_fn_with_state(
@@ -524,6 +529,25 @@ async fn list_events(
     Path(session_id): Path<SessionId>,
 ) -> Result<Json<Vec<persistence::EventRecord>>, ApiError> {
     Ok(Json(state.store.events(session_id).await?))
+}
+
+async fn get_timeline(
+    State(state): State<AppState>,
+    Path(session_id): Path<SessionId>,
+) -> Result<Json<Vec<persistence::TimelineEntry>>, ApiError> {
+    Ok(Json(state.store.timeline(session_id).await?))
+}
+
+async fn get_raw_timeline(
+    State(state): State<AppState>,
+    Path(session_id): Path<SessionId>,
+) -> Result<Json<persistence::RawTimeline>, ApiError> {
+    state
+        .store
+        .raw_timeline(session_id)
+        .await?
+        .map(Json)
+        .ok_or_else(ApiError::not_found)
 }
 
 #[derive(Debug, Serialize)]
