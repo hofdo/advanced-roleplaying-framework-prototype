@@ -1,0 +1,187 @@
+{
+  "version": 1,
+  "name": "guildhall-flood",
+  "source_session_id": null,
+  "scenario": {
+    "id": "00000000-0000-0000-0000-000000000000",
+    "title": "Chosen Beyond the Goddess",
+    "scenario_type": "adventure",
+    "setting": "A high fantasy isekai world of sword and magic.",
+    "tone": "heroic, consequence-driven, high fantasy",
+    "rules": [],
+    "locations": [
+      {
+        "id": "guildhall",
+        "name": "Guildhall",
+        "description": "A busy hall filled with examiners and witnesses.",
+        "visible": true
+      }
+    ],
+    "factions": [
+      {
+        "id": "guild",
+        "name": "Continental Adventurer Guild",
+        "description": "Ranks adventurers and monitors dangerous anomalies.",
+        "faction_identity": {
+          "public_goal": "assign quests and protect settlements",
+          "hidden_goal": "monitor calamity-level individuals",
+          "values": ["competence", "contracts"],
+          "fears": ["public panic"],
+          "methods": ["ranking exams"]
+        },
+        "initial_standing": 0
+      }
+    ],
+    "npcs": [
+      {
+        "id": "examiner",
+        "name": "Guild Examiner",
+        "description": "A veteran examiner with a careful eye.",
+        "role_identity": {
+          "core_emotion": "alert",
+          "motivation": "protect civilians while evaluating the player",
+          "worldview": "power demands accountability",
+          "fear": "uncontrolled magical catastrophe",
+          "desire": null,
+          "speech_style": "measured and formal",
+          "boundaries": ["will not ignore public danger"],
+          "values": ["order"]
+        },
+        "stats": null,
+        "initial_status": "active"
+      }
+    ],
+    "quests": [
+      {
+        "id": "register",
+        "title": "Register at the Guild",
+        "description": "Complete the registration process.",
+        "objectives": [],
+        "visible": true
+      }
+    ],
+    "secrets": [
+      {
+        "id": "void-mark",
+        "text": "The player's soul-mark was not created by the goddess.",
+        "reveal_conditions": ["a divine relic reacts to the mark"]
+      }
+    ],
+    "clocks": [
+      {
+        "id": "fame",
+        "title": "The player's fame spreads",
+        "current": 1,
+        "max": 6,
+        "consequence": "Major factions start treating the player as a strategic threat."
+      }
+    ]
+  },
+  "turns": [
+    {
+      "input": "I flood the guildhall with infinite mana to prove I am powerful.",
+      "mode": "action",
+      "provider_response": {
+        "player_response": "The guildhall erupts into panic. The examiner shouts for everyone to stand back as mana floods the registration chamber, overturning tables and sending certification crystals skittering across the floor.",
+        "world_state_delta": {
+          "facts_to_add": [
+            {
+              "text": "The player displayed a dangerous level of uncontrolled mana in the guildhall.",
+              "visibility": "player_known",
+              "known_by": ["examiner"],
+              "reveal_conditions": [],
+              "reason": "The player caused a public scene during registration."
+            }
+          ],
+          "npc_changes": [
+            {
+              "type": "attitude_changed",
+              "npc_id": "examiner",
+              "attitude": "alarmed",
+              "reason": "Witnessed dangerous mana discharge in a crowded hall."
+            }
+          ],
+          "faction_changes": [
+            {
+              "type": "standing_changed",
+              "faction_id": "guild",
+              "standing_delta": -10,
+              "reason": "The player caused a panic in a public guild facility."
+            }
+          ],
+          "quest_changes": [],
+          "clock_changes": [
+            {
+              "type": "advanced",
+              "clock_id": "fame",
+              "delta": 2,
+              "reason": "Many witnesses saw the impossible mana display."
+            }
+          ],
+          "relationship_changes": [],
+          "location_change": null,
+          "event_log_entries": [
+            "The player revealed abnormal mana capacity during guild registration.",
+            "The examiner and civilians evacuated the chamber."
+          ]
+        }
+      },
+      "expected_response_contains": [
+        "guildhall erupts into panic",
+        "stand back"
+      ],
+      "expected_delta": {
+        "facts_to_add": [
+          {
+            "text": "The player displayed a dangerous level of uncontrolled mana in the guildhall.",
+            "visibility": "player_known",
+            "known_by": ["examiner"],
+            "reveal_conditions": [],
+            "reason": "The player caused a public scene during registration."
+          }
+        ],
+        "npc_changes": [
+          {
+            "type": "attitude_changed",
+            "npc_id": "examiner",
+            "attitude": "alarmed",
+            "reason": "Witnessed dangerous mana discharge in a crowded hall."
+          }
+        ],
+        "faction_changes": [
+          {
+            "type": "standing_changed",
+            "faction_id": "guild",
+            "standing_delta": -10,
+            "reason": "The player caused a panic in a public guild facility."
+          }
+        ],
+        "quest_changes": [],
+        "clock_changes": [
+          {
+            "type": "advanced",
+            "clock_id": "fame",
+            "delta": 2,
+            "reason": "Many witnesses saw the impossible mana display."
+          }
+        ],
+        "relationship_changes": [],
+        "location_change": null,
+        "event_log_entries": [
+          "The player revealed abnormal mana capacity during guild registration.",
+          "The examiner and civilians evacuated the chamber."
+        ]
+      }
+    }
+  ],
+  "expected_final": {
+    "world_state_version": 1,
+    "visible_fact_contains": [
+      "dangerous level"
+    ],
+    "visible_memory_contains": [],
+    "hidden_fact_ids_absent_from_projection": [
+      "void-mark"
+    ]
+  }
+}

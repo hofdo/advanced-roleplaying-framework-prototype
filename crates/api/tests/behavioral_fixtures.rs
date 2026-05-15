@@ -4,13 +4,15 @@
 
 #[allow(dead_code)]
 mod common;
+#[path = "common/replay.rs"]
+mod replay;
 #[allow(dead_code)]
 #[path = "common/postgres.rs"]
 mod common_postgres;
 
 use common::{
-    json_body, mock_provider, sample_scenario, send_empty, send_empty_with_bearer, send_json,
-    turn_responses,
+    json_body, mock_provider, sample_scenario, send_empty, send_empty_with_bearer,
+    send_json, turn_responses,
 };
 use common_postgres::postgres_test_context_with_config;
 use domain::{FrontendVisibleState, WorldState};
@@ -24,6 +26,14 @@ fn admin_postgres_config() -> shared::AppConfig {
     config.admin.enabled = true;
     config.admin.token = Some(ADMIN_TOKEN.into());
     config
+}
+
+#[tokio::test]
+#[ignore = "requires Docker-backed Postgres integration"]
+async fn replay_guildhall_flood_fixture() {
+    replay::run_fixture(include_str!("fixtures/replay/guildhall-flood.json"))
+        .await
+        .expect("fixture replays");
 }
 
 /// Full pipeline fixture:
