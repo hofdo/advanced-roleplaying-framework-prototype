@@ -55,3 +55,41 @@ pub fn build_provider_from_config(
         other => anyhow::bail!("unknown provider_type '{other}'"),
     }
 }
+
+pub fn build_provider_from_record_fields(
+    name: impl Into<String>,
+    provider_type: impl Into<String>,
+    base_url: impl Into<String>,
+    api_key_secret_ref: Option<String>,
+    model: impl Into<String>,
+    capabilities_json: serde_json::Value,
+) -> anyhow::Result<Arc<dyn LlmProvider>> {
+    let name = name.into();
+    let provider_type = provider_type.into();
+    let base_url = base_url.into();
+    let model = model.into();
+    let caps: ProviderCapabilities = serde_json::from_value(capabilities_json.clone())
+        .map_err(|error| anyhow::anyhow!("invalid provider capabilities: {error}"))?;
+    let api_key = resolve_secret(api_key_secret_ref.as_deref())
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+
+    match provider_type.as_str() {
+        "" | "openai_compatible" => Ok(Arc::new(
+            OpenAiCompatibleProvider::new(name, base_url, api_key, model, caps)
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?,
+        )),
+        "llama_cpp" => Ok(Arc::new(
+            LlamaCppProvider::new(name, base_url, api_key, model, caps)
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?,
+        )),
+        "openrouter" => {
+            let extras: OpenRouterExtras =
+                serde_json::from_value(capabilities_json).unwrap_or_default();
+            Ok(Arc::new(
+                OpenRouterProvider::new(base_url, api_key, model, caps, extras)
+                    .map_err(|error| anyhow::anyhow!(error.to_string()))?,
+            ))
+        }
+        other => anyhow::bail!("unknown provider_type '{other}'"),
+    }
+}

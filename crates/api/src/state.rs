@@ -4,8 +4,7 @@ use persistence::{
     PgPersistence, PostgresSessionTurnLock, ProviderConfigRepository, ProviderRecord,
 };
 use providers::{
-    LlamaCppProvider, LlmProvider, OpenAiCompatibleProvider, OpenRouterExtras, OpenRouterProvider,
-    ProviderCapabilities, resolve_secret,
+    LlmProvider, build_provider_from_record_fields,
 };
 use shared::{AppConfig, StorageBackend};
 use std::{collections::HashMap, sync::Arc};
@@ -135,47 +134,14 @@ pub fn build_provider_registry(
 }
 
 pub fn provider_from_record(record: &ProviderRecord) -> anyhow::Result<Arc<dyn LlmProvider>> {
-    let caps: ProviderCapabilities = serde_json::from_value(record.capabilities.clone())
-        .map_err(|e| anyhow::anyhow!("invalid provider capabilities: {e}"))?;
-    let api_key = resolve_secret(record.api_key_secret_ref.as_deref())
-        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-    match record.provider_type.as_str() {
-        "" | "openai_compatible" => Ok(Arc::new(
-            OpenAiCompatibleProvider::new(
-                record.name.clone(),
-                record.base_url.clone(),
-                api_key,
-                record.model.clone(),
-                caps,
-            )
-            .map_err(|e| anyhow::anyhow!(e.to_string()))?,
-        )),
-        "llama_cpp" => Ok(Arc::new(
-            LlamaCppProvider::new(
-                record.name.clone(),
-                record.base_url.clone(),
-                api_key,
-                record.model.clone(),
-                caps,
-            )
-            .map_err(|e| anyhow::anyhow!(e.to_string()))?,
-        )),
-        "openrouter" => {
-            let extras: OpenRouterExtras =
-                serde_json::from_value(record.capabilities.clone()).unwrap_or_default();
-            Ok(Arc::new(
-                OpenRouterProvider::new(
-                    record.base_url.clone(),
-                    api_key,
-                    record.model.clone(),
-                    caps,
-                    extras,
-                )
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?,
-            ))
-        }
-        other => anyhow::bail!("unknown provider_type '{other}'"),
-    }
+    build_provider_from_record_fields(
+        record.name.clone(),
+        record.provider_type.clone(),
+        record.base_url.clone(),
+        record.api_key_secret_ref.clone(),
+        record.model.clone(),
+        record.capabilities.clone(),
+    )
 }
 
 pub async fn project_session_state(

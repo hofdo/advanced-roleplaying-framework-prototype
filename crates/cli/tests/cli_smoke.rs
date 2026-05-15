@@ -45,6 +45,24 @@ impl Drop for TempScenarioFile {
     }
 }
 
+struct TempConfigFile {
+    path: PathBuf,
+}
+
+impl TempConfigFile {
+    fn write(contents: &str) -> Self {
+        let path = std::env::temp_dir().join(format!("rp-cli-config-{}.toml", Uuid::new_v4()));
+        std::fs::write(&path, contents).expect("temp config file should write");
+        Self { path }
+    }
+}
+
+impl Drop for TempConfigFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 fn run_cli(args: &[&str]) -> Output {
     let exe = std::env::var("CARGO_BIN_EXE_rp").expect("rp test binary path");
     std::process::Command::new(exe)
@@ -52,6 +70,12 @@ fn run_cli(args: &[&str]) -> Output {
         .args(args)
         .output()
         .expect("cli process should run")
+}
+
+fn run_cli_with_config(config: &TempConfigFile, args: &[&str]) -> Output {
+    let mut full_args = vec!["--config", config.path.to_str().expect("config path utf-8")];
+    full_args.extend_from_slice(args);
+    run_cli(&full_args)
 }
 
 fn stdout(output: &Output) -> String {
@@ -92,6 +116,43 @@ fn sample_scenario() -> domain::Scenario {
             consequence: "factions notice".into(),
         }],
     }
+}
+
+fn test_config_toml(default_name: &str, base_url: &str, model: &str) -> String {
+    format!(
+        r#"[server]
+host = "0.0.0.0"
+port = 8080
+
+[database]
+url = "postgres://roleplay:roleplay@localhost:5432/roleplay"
+
+[storage]
+backend = "memory"
+migrate_on_startup = true
+
+[provider.default]
+name = "{default_name}"
+provider_type = "openai_compatible"
+base_url = "{base_url}"
+api_key = ""
+model = "{model}"
+supports_streaming = true
+supports_json_mode = true
+max_context_tokens = 4096
+request_timeout_seconds = 5
+stream_idle_timeout_seconds = 5
+max_retries = 0
+include_usage = true
+
+[admin]
+enabled = false
+
+[debug]
+store_raw_provider_output = false
+allow_debug_state = false
+"#
+    )
 }
 
 fn build_state() -> (
@@ -336,6 +397,48 @@ fn scenario_validate_reports_valid_and_invalid_files() {
 
     assert!(!invalid_output.status.success());
     assert!(stderr(&invalid_output).contains("duplicate location id"));
+}
+
+#[test]
+fn provider_status_reports_default_provider_in_memory_mode() {
+    let config = TempConfigFile::write(&test_config_toml("status-default", "", "status-model"));
+
+    let output = run_cli_with_config(&config, &["provider", "status"]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let rendered = stdout(&output);
+    assert!(rendered.contains("storage: memory"));
+    assert!(rendered.contains("default: status-default"));
+    assert!(rendered.contains("registered providers: unavailable in memory mode"));
+}
+
+#[test]
+fn provider_test_default_reports_health_and_readiness() {
+    let config = TempConfigFile::write(&test_config_toml("test-default", "", "test-model"));
+
+    let output = run_cli_with_config(&config, &["provider", "test"]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let rendered = stdout(&output);
+    assert!(rendered.contains("name: test-default"));
+    assert!(rendered.contains("health: ok=false"));
+    assert!(rendered.contains("readiness: configured=false reachable=false"));
+}
+
+#[test]
+fn provider_test_registered_requires_postgres_for_provider_id() {
+    let config = TempConfigFile::write(&test_config_toml("test-default", "", "test-model"));
+    let provider_id = Uuid::new_v4().to_string();
+
+    let output =
+        run_cli_with_config(&config, &["provider", "test", "--provider-id", &provider_id]);
+
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("provider lookup by id is unavailable in memory mode"),
+        "stderr: {}",
+        stderr(&output)
+    );
 }
 
 #[test]

@@ -7,7 +7,7 @@ pub mod openrouter;
 pub mod provider;
 pub mod secrets;
 
-pub use factory::build_provider_from_config;
+pub use factory::{build_provider_from_config, build_provider_from_record_fields};
 pub use llama_cpp::*;
 pub use mock::*;
 pub use openai_compatible::*;
