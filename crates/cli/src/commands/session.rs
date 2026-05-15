@@ -1,6 +1,9 @@
 use anyhow::Result;
 use clap::Subcommand;
+use domain::{ViewerContext, WorldState};
+use engine::FrontendStateProjector;
 use persistence::SessionRecord;
+use shared::build_replay_fixture_draft;
 use uuid::Uuid;
 
 use crate::{
@@ -41,6 +44,12 @@ pub enum Cmd {
     },
     /// Show the effective provider mode for a session.
     Provider { session_id: Uuid },
+    /// Export a replay fixture draft for a session.
+    ExportFixture {
+        session_id: Uuid,
+        #[arg(long)]
+        name: String,
+    },
 }
 
 pub async fn run(state: CliState, cmd: Cmd) -> Result<()> {
@@ -100,6 +109,10 @@ pub async fn run(state: CliState, cmd: Cmd) -> Result<()> {
             print_session_provider(&session);
             Ok(())
         }
+        Cmd::ExportFixture { session_id, name } => {
+            let fixture = export_replay_fixture_draft(&state, session_id, name).await?;
+            print_json(&fixture)
+        }
     }
 }
 
@@ -124,10 +137,50 @@ fn describe_session_provider(session: &SessionRecord) -> Vec<String> {
     lines
 }
 
+async fn export_replay_fixture_draft(
+    state: &CliState,
+    session_id: Uuid,
+    name: String,
+) -> Result<shared::ReplayFixture> {
+    let session = state
+        .store
+        .get_session(session_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("session {session_id} not found"))?;
+    let scenario = state
+        .store
+        .get_scenario(session.scenario_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("scenario {} not found", session.scenario_id))?;
+    let world_state = state
+        .store
+        .world_state(session_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("world state for session {session_id} not found"))?;
+    let visible_state = project_visible_state(&scenario, &world_state);
+
+    Ok(build_replay_fixture_draft(
+        name,
+        Some(session_id),
+        scenario,
+        &world_state,
+        &visible_state,
+    ))
+}
+
+fn project_visible_state(
+    scenario: &domain::Scenario,
+    world_state: &WorldState,
+) -> domain::FrontendVisibleState {
+    engine::BasicFrontendStateProjector.project(scenario, world_state, &ViewerContext::player())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::describe_session_provider;
+    use super::{describe_session_provider, project_visible_state};
+    use domain::{Fact, FactSource, FactVisibility, FrontendVisibleState, Scenario, ScenarioType};
     use persistence::SessionRecord;
+    use shared::build_replay_fixture_draft;
     use uuid::Uuid;
 
     #[test]
@@ -168,6 +221,87 @@ mod tests {
                 "provider mode: override".to_string(),
                 format!("provider id: {provider_id}"),
             ]
+        );
+    }
+
+    fn scenario() -> Scenario {
+        Scenario {
+            id: Uuid::new_v4(),
+            title: "fixture export".into(),
+            scenario_type: ScenarioType::Adventure,
+            setting: "test".into(),
+            tone: "test".into(),
+            rules: vec![],
+            locations: vec![],
+            factions: vec![],
+            npcs: vec![],
+            quests: vec![],
+            secrets: vec![],
+            clocks: vec![],
+        }
+    }
+
+    #[test]
+    fn replay_fixture_draft_uses_shared_schema() {
+        let scenario = scenario();
+        let world_state = domain::WorldState {
+            session_id: Uuid::new_v4(),
+            scenario_id: scenario.id,
+            version: 2,
+            current_location_id: None,
+            current_scene: None,
+            active_speaker_id: None,
+            facts: vec![
+                Fact {
+                    id: "player-fact".into(),
+                    text: "The player is trusted.".into(),
+                    visibility: FactVisibility::PlayerKnown,
+                    known_by: vec![],
+                    source: FactSource::Turn,
+                    reveal_conditions: vec![],
+                    related_secret_ids: vec![],
+                    reveal_condition_satisfied: None,
+                },
+                Fact {
+                    id: "gm-secret".into(),
+                    text: "Hidden truth".into(),
+                    visibility: FactVisibility::GmOnly,
+                    known_by: vec![],
+                    source: FactSource::Turn,
+                    reveal_conditions: vec![],
+                    related_secret_ids: vec![],
+                    reveal_condition_satisfied: None,
+                },
+            ],
+            npcs: vec![],
+            factions: vec![],
+            quests: vec![],
+            clocks: vec![],
+            relationships: vec![],
+            inventory: vec![],
+            memories: vec![],
+            summary: None,
+            recent_events: vec![],
+        };
+        let visible_state: FrontendVisibleState = project_visible_state(&scenario, &world_state);
+
+        let fixture = build_replay_fixture_draft(
+            "draft".into(),
+            Some(world_state.session_id),
+            scenario.clone(),
+            &world_state,
+            &visible_state,
+        );
+
+        assert_eq!(fixture.version, 1);
+        assert_eq!(fixture.name, "draft");
+        assert_eq!(fixture.source_session_id, Some(world_state.session_id));
+        assert_eq!(fixture.scenario, scenario);
+        assert!(fixture.turns.is_empty());
+        assert_eq!(fixture.expected_final.world_state_version, 2);
+        assert_eq!(
+            fixture.expected_final.hidden_fact_ids_absent_from_projection,
+            vec!["gm-secret".to_string()]
         );
     }
 }

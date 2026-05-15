@@ -12,6 +12,7 @@ use engine::{
 use futures::StreamExt;
 use persistence::{ApplicationStore, InMemoryApplicationStore};
 use providers::{LlmProvider, MockProvider};
+use shared::build_replay_fixture_draft;
 use uuid::Uuid;
 
 const DELTA_JSON: &str = r#"{
@@ -348,6 +349,62 @@ async fn session_timeline_tracks_public_and_raw_history() {
     assert_eq!(raw_timeline.messages.len(), 2);
     assert!(raw_timeline.deltas.is_empty());
     assert!(!raw_timeline.events.is_empty());
+}
+
+#[tokio::test]
+async fn export_fixture_draft_matches_schema() {
+    let (store, lock, provider) = build_state();
+
+    let scenario = store
+        .create_scenario(sample_scenario())
+        .await
+        .expect("create scenario");
+    let session = store
+        .create_session(scenario.id, "fixture-draft".into())
+        .await
+        .expect("create session")
+        .expect("session");
+
+    let provider_arc: Arc<dyn LlmProvider> = provider.clone();
+    let pipeline = Arc::new(DefaultTurnPipeline::with_lock(
+        provider_arc,
+        Arc::clone(&store),
+        lock,
+    ));
+
+    let response = pipeline
+        .process_turn(TurnRequestInput {
+            session_id: session.id,
+            input: "I greet the examiner.".into(),
+            mode: Some(TurnMode::Dialogue),
+            viewer: ViewerContext::player(),
+        })
+        .await
+        .expect("process_turn");
+    assert_eq!(response.world_state_version, 1);
+
+    let world_state = store
+        .world_state(session.id)
+        .await
+        .expect("world state query")
+        .expect("world state");
+    let visible_state =
+        BasicFrontendStateProjector.project(&scenario, &world_state, &ViewerContext::player());
+    let fixture = build_replay_fixture_draft(
+        "smoke".into(),
+        Some(session.id),
+        scenario.clone(),
+        &world_state,
+        &visible_state,
+    );
+    let fixture_json = serde_json::to_value(&fixture).expect("fixture json");
+
+    assert_eq!(fixture_json["version"], 1);
+    assert_eq!(fixture_json["name"], "smoke");
+    assert_eq!(fixture_json["source_session_id"], session.id.to_string());
+    assert!(fixture_json.get("scenario").is_some());
+    assert_eq!(fixture_json["turns"], serde_json::json!([]));
+    assert_eq!(fixture_json["expected_final"]["world_state_version"], 1);
 }
 
 #[test]
